@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
+import { transcriptionService } from './transcriptionService';
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -9,6 +10,8 @@ function App() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
   const [copied, setCopied] = useState(false);
+  const [mode, setMode] = useState('backend');
+  const [modelLoadProgress, setModelLoadProgress] = useState(null);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -120,52 +123,37 @@ function App() {
     }
   };
 
+  const handleModeChange = (newMode) => {
+    setMode(newMode);
+    transcriptionService.setMode(newMode);
+    setTranscription('');
+    setModelLoadProgress(null);
+  };
+
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
-    setTranscription('Procesando audio con Whisper... Esto puede tardar unos segundos.');
-
-    console.log('Enviando audio al servidor...', {
-      size: audioBlob.size,
-      type: audioBlob.type
-    });
+    const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
+    setTranscription(`Procesando audio con Whisper (${modeText})... Esto puede tardar unos segundos.`);
 
     try {
-      const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.wav');
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000);
-
-      const response = await fetch('http://localhost:5001/transcribe', {
-        method: 'POST',
-        body: formData,
-        signal: controller.signal
+      const result = await transcriptionService.transcribe(audioBlob, (progress) => {
+        if (progress.status === 'progress' && progress.progress) {
+          setModelLoadProgress(Math.round(progress.progress));
+        }
       });
 
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        throw new Error(`Error del servidor: ${response.status}`);
-      }
-
-      const data = await response.json();
-      console.log('Respuesta recibida:', data);
-
-      if (data.success) {
-        setTranscription(data.transcription);
-        console.log('Transcripción completada');
+      if (result.success) {
+        setTranscription(result.transcription);
+        console.log(`Transcription completed using ${result.method}`);
       } else {
-        setTranscription('Error: ' + (data.error || 'No se pudo transcribir'));
+        setTranscription('Error: No se pudo transcribir');
       }
     } catch (error) {
-      console.error('Error al transcribir:', error);
-      if (error.name === 'AbortError') {
-        setTranscription('Timeout: El audio es muy largo. Intenta con una grabación más corta.');
-      } else {
-        setTranscription('Error de conexión. Asegúrate de que el servidor esté corriendo en http://localhost:5001');
-      }
+      console.error('Transcription error:', error);
+      setTranscription(`Error: ${error.message}`);
     } finally {
       setIsTranscribing(false);
+      setModelLoadProgress(null);
     }
   };
 
@@ -198,6 +186,39 @@ function App() {
           </div>
           <h1>Whisper Transcriptor</h1>
           <p className="subtitle">Transcripción de voz en tiempo real</p>
+        </div>
+
+        <div className="mode-toggle-container">
+          <div className="mode-toggle">
+            <button
+              className={`mode-btn ${mode === 'backend' ? 'active' : ''}`}
+              onClick={() => handleModeChange('backend')}
+              disabled={isRecording || isTranscribing}
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M3 3a2 2 0 012-2h10a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V3z"/>
+                <rect x="6" y="5" width="8" height="2" rx="1" fill="#1a1a2e"/>
+                <rect x="6" y="9" width="6" height="2" rx="1" fill="#1a1a2e"/>
+                <rect x="6" y="13" width="8" height="2" rx="1" fill="#1a1a2e"/>
+              </svg>
+              <span>Backend Python</span>
+            </button>
+            <button
+              className={`mode-btn ${mode === 'webgpu' ? 'active' : ''}`}
+              onClick={() => handleModeChange('webgpu')}
+              disabled={isRecording || isTranscribing}
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 2L3 6v8l7 4 7-4V6l-7-4zm0 2.5L14.5 7 10 9.5 5.5 7 10 4.5zm-5 5L9 10v6l-4-2.3V9.5zm10 0v4.2L11 16v-6l4-2.5z"/>
+              </svg>
+              <span>WebGPU (Navegador)</span>
+            </button>
+          </div>
+          <p className="mode-info">
+            {mode === 'backend'
+              ? '🖥️ Usando Whisper Medium en servidor Python'
+              : '🌐 Usando Whisper Small en tu navegador (GPU local)'}
+          </p>
         </div>
 
         <div className="visualizer">
@@ -274,7 +295,14 @@ function App() {
               <div className="spinner-ring"></div>
             </div>
             <p className="loading-text">Procesando audio con Whisper...</p>
-            <p className="loading-subtext">Esto puede tardar unos segundos</p>
+            <p className="loading-subtext">
+              {modelLoadProgress !== null
+                ? `Cargando modelo: ${modelLoadProgress}%`
+                : 'Esto puede tardar unos segundos'}
+            </p>
+            {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
+              <p className="loading-note">Primera vez: descargando modelo (~150 MB)</p>
+            )}
           </div>
         ) : transcription && (
           <div className="transcription-container">

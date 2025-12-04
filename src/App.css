@@ -52,7 +52,7 @@
 
 .header {
   text-align: center;
-  margin-bottom: 3rem;
+  margin-bottom: 2rem;
   padding-bottom: 2rem;
   border-bottom: 1px solid var(--border-color);
 }
@@ -91,6 +91,70 @@ h1 {
   font-size: 1.0625rem;
   font-weight: 400;
   letter-spacing: 0.01em;
+}
+
+.mode-toggle-container {
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  padding: 1rem 1.5rem;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 2px solid var(--border-color);
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  font-family: inherit;
+  box-shadow: var(--shadow-sm);
+}
+
+.mode-btn svg {
+  transition: all 0.3s ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.mode-btn.active {
+  background: linear-gradient(135deg, var(--accent-primary) 0%, var(--accent-secondary) 100%);
+  color: var(--text-primary);
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+}
+
+.mode-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.mode-info {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  background: rgba(99, 102, 241, 0.05);
+  border-radius: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.1);
 }
 
 .visualizer {
@@ -379,6 +443,13 @@ h1 {
   animation-delay: 0.2s;
 }
 
+.loading-note {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
 @keyframes pulse-text {
   0%, 100% {
     opacity: 1;
@@ -580,5 +651,18 @@ h1 {
 
   .copy-btn {
     width: 100%;
+  }
+
+  .mode-toggle {
+    flex-direction: column;
+    gap: 0.625rem;
+  }
+
+  .mode-btn span {
+    font-size: 0.875rem;
+  }
+
+  .mode-info {
+    font-size: 0.8125rem;
   }
 }
