@@ -2,6 +2,10 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .app {
@@ -243,22 +247,29 @@ h1 {
   line-height: 1.7;
   white-space: pre-wrap;
   word-wrap: break-word;
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
 }
 
 .copy-btn {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 0.5rem;
   margin-top: 1rem;
-  padding: 0.75rem 1.5rem;
+  padding: 1rem 2rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 12px;
   font-weight: 600;
+  font-size: 1rem;
   cursor: pointer;
   transition: all 0.3s ease;
   font-family: inherit;
+  width: 160px;
 }
 
 .copy-btn:hover {
@@ -268,6 +279,36 @@ h1 {
 
 .copy-btn:active {
   transform: translateY(0);
+}
+
+.copy-btn.copied {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  animation: copySuccess 0.3s ease;
+}
+
+@keyframes copySuccess {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.copy-btn.copied svg {
+  animation: checkmark 0.3s ease;
+}
+
+@keyframes checkmark {
+  0% {
+    transform: scale(0) rotate(-45deg);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+  }
 }
 
 @media (max-width: 640px) {
