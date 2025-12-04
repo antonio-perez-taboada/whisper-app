@@ -180,13 +180,18 @@ function App() {
       <div className="container">
         <div className="header">
           <div className="logo">
-            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-              <circle cx="20" cy="20" r="18" stroke="url(#gradient)" strokeWidth="3" />
-              <path d="M20 10v20M15 15v10M25 15v10M10 18v4M30 18v4" stroke="url(#gradient)" strokeWidth="2.5" strokeLinecap="round" />
+            <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+              <circle cx="28" cy="28" r="26" stroke="url(#gradient)" strokeWidth="2.5" opacity="0.3" />
+              <circle cx="28" cy="28" r="22" stroke="url(#gradient)" strokeWidth="3" />
+              <path d="M28 14v28M22 20v16M34 20v16M16 24v8M40 24v8"
+                    stroke="url(#gradient)"
+                    strokeWidth="3"
+                    strokeLinecap="round" />
               <defs>
-                <linearGradient id="gradient" x1="0" y1="0" x2="40" y2="40">
-                  <stop offset="0%" stopColor="#667eea" />
-                  <stop offset="100%" stopColor="#764ba2" />
+                <linearGradient id="gradient" x1="0" y1="0" x2="56" y2="56">
+                  <stop offset="0%" stopColor="#6366f1" />
+                  <stop offset="50%" stopColor="#8b5cf6" />
+                  <stop offset="100%" stopColor="#ec4899" />
                 </linearGradient>
               </defs>
             </svg>
@@ -197,15 +202,15 @@ function App() {
 
         <div className="visualizer">
           <div className="waveform">
-            {[...Array(20)].map((_, i) => (
+            {[...Array(24)].map((_, i) => (
               <div
                 key={i}
                 className="bar"
                 style={{
                   height: isRecording && !isPaused
-                    ? `${Math.random() * audioLevel * 2 + 20}%`
-                    : '20%',
-                  animationDelay: `${i * 0.05}s`
+                    ? `${Math.random() * audioLevel * 2.5 + 15}%`
+                    : '15%',
+                  animationDelay: `${i * 0.04}s`
                 }}
               />
             ))}
@@ -213,7 +218,7 @@ function App() {
           {isRecording && (
             <div className="recording-indicator">
               <span className="pulse-dot"></span>
-              <span className="recording-text">{isPaused ? 'PAUSADO' : 'GRABANDO'}</span>
+              <span className="recording-text">{isPaused ? 'Pausado' : 'Grabando'}</span>
               <span className="timer">{formatTime(recordingTime)}</span>
             </div>
           )}
@@ -225,8 +230,8 @@ function App() {
             onClick={startRecording}
             disabled={isRecording}
           >
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="currentColor">
-              <circle cx="16" cy="16" r="12" />
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
+              <circle cx="14" cy="14" r="10" />
             </svg>
             <span>Grabar</span>
           </button>
@@ -236,13 +241,13 @@ function App() {
             onClick={pauseRecording}
             disabled={!isRecording}
           >
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="currentColor">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
               {isPaused ? (
-                <path d="M10 8l16 8-16 8z" />
+                <path d="M9 7l14 7-14 7z" />
               ) : (
                 <>
-                  <rect x="10" y="8" width="4" height="16" rx="1" />
-                  <rect x="18" y="8" width="4" height="16" rx="1" />
+                  <rect x="9" y="7" width="3.5" height="14" rx="1.5" />
+                  <rect x="15.5" y="7" width="3.5" height="14" rx="1.5" />
                 </>
               )}
             </svg>
@@ -254,46 +259,55 @@ function App() {
             onClick={stopRecording}
             disabled={!isRecording}
           >
-            <svg width="32" height="32" viewBox="0 0 32 32" fill="currentColor">
-              <rect x="10" y="10" width="12" height="12" rx="2" />
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
+              <rect x="9" y="9" width="10" height="10" rx="2" />
             </svg>
             <span>Detener</span>
           </button>
         </div>
 
-        <div className="transcription-container">
-          <div className="transcription-header">
-            <h2>Transcripción</h2>
-            {isTranscribing && (
-              <div className="spinner"></div>
-            )}
+        {isTranscribing ? (
+          <div className="loading-container">
+            <div className="loading-spinner">
+              <div className="spinner-ring"></div>
+              <div className="spinner-ring"></div>
+              <div className="spinner-ring"></div>
+            </div>
+            <p className="loading-text">Procesando audio con Whisper...</p>
+            <p className="loading-subtext">Esto puede tardar unos segundos</p>
           </div>
-          <div className="transcription-box">
-            {transcription || 'La transcripción aparecerá aquí...'}
+        ) : transcription && (
+          <div className="transcription-container">
+            <div className="transcription-header">
+              <h2>Transcripción</h2>
+            </div>
+            <div className="transcription-box">
+              {transcription}
+            </div>
+            <div className="copy-btn-wrapper">
+              <button
+                className={`copy-btn ${copied ? 'copied' : ''}`}
+                onClick={() => {
+                  navigator.clipboard.writeText(transcription);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 2000);
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                  {copied ? (
+                    <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
+                  ) : (
+                    <>
+                      <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
+                      <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
+                    </>
+                  )}
+                </svg>
+                {copied ? '¡Copiado!' : 'Copiar'}
+              </button>
+            </div>
           </div>
-          {transcription && !isTranscribing && (
-            <button
-              className={`copy-btn ${copied ? 'copied' : ''}`}
-              onClick={() => {
-                navigator.clipboard.writeText(transcription);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                {copied ? (
-                  <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
-                ) : (
-                  <>
-                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
-                  </>
-                )}
-              </svg>
-              {copied ? '¡Copiado!' : 'Copiar'}
-            </button>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );
