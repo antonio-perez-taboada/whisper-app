@@ -35,11 +35,6 @@ function App() {
       }
     };
 
-    // Set default model for mobile
-    if (transcriptionService.isMobileDevice()) {
-      transcriptionService.setSelectedModel('base');
-    }
-
     checkBackend();
 
     return () => {

@@ -11,7 +11,8 @@ class TranscriptionService {
     this.modelLoaded = false;
     this.backendAvailable = false;
     this.modelName = null;
-    this.selectedModel = null; // User-selected model (overrides auto-detection)
+    // Set default model: base for mobile, null (auto) for desktop
+    this.selectedModel = this.isMobileDevice() ? 'Xenova/whisper-base' : null;
   }
 
   isMobileDevice() {
