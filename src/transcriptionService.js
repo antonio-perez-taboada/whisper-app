@@ -78,7 +78,13 @@ class TranscriptionService {
     if (modelSize === null || modelSize === 'auto') {
       this.selectedModel = null;
     } else {
-      this.selectedModel = `Xenova/whisper-${modelSize}`;
+      // Prevent Small model on mobile devices (causes crashes due to memory limits)
+      if (modelSize === 'small' && this.isMobileDevice()) {
+        console.warn('Small model not supported on mobile devices, using Base instead');
+        this.selectedModel = 'Xenova/whisper-base';
+      } else {
+        this.selectedModel = `Xenova/whisper-${modelSize}`;
+      }
     }
     // Reset model loaded state to force reload with new model
     this.modelLoaded = false;

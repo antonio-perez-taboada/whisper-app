@@ -457,16 +457,15 @@ function App() {
                   <span className="model-name">Base</span>
                   <span className="model-size">~75 MB</span>
                 </button>
-                <button
-                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
-                  onClick={() => handleModelChange('small')}
-                >
-                  <span className="model-name">Small</span>
-                  <span className="model-size">~150 MB</span>
-                  {transcriptionService.isMobileDevice() && (
-                    <span className="model-warning">⚠️ Pesado</span>
-                  )}
-                </button>
+                {!transcriptionService.isMobileDevice() && (
+                  <button
+                    className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('small')}
+                  >
+                    <span className="model-name">Small</span>
+                    <span className="model-size">~150 MB</span>
+                  </button>
+                )}
               </div>
               <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
             </div>
