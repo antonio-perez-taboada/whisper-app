@@ -200,7 +200,7 @@ function App() {
           <p className="subtitle">Transcripción de voz</p>
         </div>
 
-        {backendAvailable && (
+{backendAvailable ? (
           <div className="mode-toggle-container">
             <div className="mode-toggle">
               <button
@@ -230,7 +230,13 @@ function App() {
             <p className="mode-info">
               {mode === 'backend'
                 ? '🖥️ Usando Whisper Medium en servidor Python'
-                : '🌐 Usando Whisper Small en tu navegador (GPU local)'}
+                : `🌐 Usando Whisper ${transcriptionService.isMobileDevice() ? 'Tiny' : 'Small'} en tu navegador (GPU local)`}
+            </p>
+          </div>
+        ) : (
+          <div className="mode-toggle-container">
+            <p className="mode-info">
+              🌐 Usando Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'} en tu navegador
             </p>
           </div>
         )}
@@ -315,7 +321,9 @@ function App() {
                 : 'Esto puede tardar unos segundos'}
             </p>
             {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
-              <p className="loading-note">Primera vez: descargando modelo (~150 MB)</p>
+              <p className="loading-note">
+                Primera vez: descargando modelo Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'}
+              </p>
             )}
           </div>
         ) : transcription && (

@@ -10,6 +10,16 @@ class TranscriptionService {
     this.modelLoading = false;
     this.modelLoaded = false;
     this.backendAvailable = false;
+    this.modelName = null;
+  }
+
+  isMobileDevice() {
+    return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  }
+
+  getModelForDevice() {
+    // Tiny for mobile (~40 MB), Small for desktop (~150 MB)
+    return this.isMobileDevice() ? 'Xenova/whisper-tiny' : 'Xenova/whisper-small';
   }
 
   setMode(mode) {
@@ -30,16 +40,21 @@ class TranscriptionService {
     this.modelLoading = true;
 
     try {
+      this.modelName = this.getModelForDevice();
+      const deviceType = this.isMobileDevice() ? 'mobile' : 'desktop';
+
+      console.log(`Loading Whisper model for ${deviceType}: ${this.modelName}`);
+
       this.whisperPipeline = await pipeline(
         'automatic-speech-recognition',
-        'Xenova/whisper-small',
+        this.modelName,
         {
           progress_callback: onProgress
         }
       );
 
       this.modelLoaded = true;
-      console.log('WebGPU Whisper model loaded successfully');
+      console.log(`WebGPU Whisper model loaded successfully: ${this.modelName}`);
     } catch (error) {
       console.error('Error loading WebGPU model:', error);
       throw error;
@@ -183,6 +198,10 @@ class TranscriptionService {
 
   isBackendAvailable() {
     return this.backendAvailable;
+  }
+
+  getModelName() {
+    return this.modelName;
   }
 }
 
