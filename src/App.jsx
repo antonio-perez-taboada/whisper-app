@@ -10,8 +10,9 @@ function App() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
   const [copied, setCopied] = useState(false);
-  const [mode, setMode] = useState('backend');
+  const [mode, setMode] = useState('webgpu');
   const [modelLoadProgress, setModelLoadProgress] = useState(null);
+  const [backendAvailable, setBackendAvailable] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -21,6 +22,17 @@ function App() {
   const timerIntervalRef = useRef(null);
 
   useEffect(() => {
+    const checkBackend = async () => {
+      const available = await transcriptionService.checkBackendAvailability();
+      setBackendAvailable(available);
+      if (available) {
+        setMode('backend');
+        transcriptionService.setMode('backend');
+      }
+    };
+
+    checkBackend();
+
     return () => {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
@@ -184,42 +196,44 @@ function App() {
               </defs>
             </svg>
           </div>
-          <h1>Whisper Transcriptor</h1>
-          <p className="subtitle">Transcripción de voz en tiempo real</p>
+          <h1>Transcript X</h1>
+          <p className="subtitle">Transcripción de voz</p>
         </div>
 
-        <div className="mode-toggle-container">
-          <div className="mode-toggle">
-            <button
-              className={`mode-btn ${mode === 'backend' ? 'active' : ''}`}
-              onClick={() => handleModeChange('backend')}
-              disabled={isRecording || isTranscribing}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M3 3a2 2 0 012-2h10a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V3z"/>
-                <rect x="6" y="5" width="8" height="2" rx="1" fill="#1a1a2e"/>
-                <rect x="6" y="9" width="6" height="2" rx="1" fill="#1a1a2e"/>
-                <rect x="6" y="13" width="8" height="2" rx="1" fill="#1a1a2e"/>
-              </svg>
-              <span>Backend Python</span>
-            </button>
-            <button
-              className={`mode-btn ${mode === 'webgpu' ? 'active' : ''}`}
-              onClick={() => handleModeChange('webgpu')}
-              disabled={isRecording || isTranscribing}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 2L3 6v8l7 4 7-4V6l-7-4zm0 2.5L14.5 7 10 9.5 5.5 7 10 4.5zm-5 5L9 10v6l-4-2.3V9.5zm10 0v4.2L11 16v-6l4-2.5z"/>
-              </svg>
-              <span>WebGPU (Navegador)</span>
-            </button>
+        {backendAvailable && (
+          <div className="mode-toggle-container">
+            <div className="mode-toggle">
+              <button
+                className={`mode-btn ${mode === 'backend' ? 'active' : ''}`}
+                onClick={() => handleModeChange('backend')}
+                disabled={isRecording || isTranscribing}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M3 3a2 2 0 012-2h10a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V3z"/>
+                  <rect x="6" y="5" width="8" height="2" rx="1" fill="#1a1a2e"/>
+                  <rect x="6" y="9" width="6" height="2" rx="1" fill="#1a1a2e"/>
+                  <rect x="6" y="13" width="8" height="2" rx="1" fill="#1a1a2e"/>
+                </svg>
+                <span>Backend Python</span>
+              </button>
+              <button
+                className={`mode-btn ${mode === 'webgpu' ? 'active' : ''}`}
+                onClick={() => handleModeChange('webgpu')}
+                disabled={isRecording || isTranscribing}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M10 2L3 6v8l7 4 7-4V6l-7-4zm0 2.5L14.5 7 10 9.5 5.5 7 10 4.5zm-5 5L9 10v6l-4-2.3V9.5zm10 0v4.2L11 16v-6l4-2.5z"/>
+                </svg>
+                <span>WebGPU (Navegador)</span>
+              </button>
+            </div>
+            <p className="mode-info">
+              {mode === 'backend'
+                ? '🖥️ Usando Whisper Medium en servidor Python'
+                : '🌐 Usando Whisper Small en tu navegador (GPU local)'}
+            </p>
           </div>
-          <p className="mode-info">
-            {mode === 'backend'
-              ? '🖥️ Usando Whisper Medium en servidor Python'
-              : '🌐 Usando Whisper Small en tu navegador (GPU local)'}
-          </p>
-        </div>
+        )}
 
         <div className="visualizer">
           <div className="waveform">

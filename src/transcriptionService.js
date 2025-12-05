@@ -5,10 +5,11 @@ env.useBrowserCache = true;
 
 class TranscriptionService {
   constructor() {
-    this.mode = 'backend'; // 'backend' or 'webgpu'
+    this.mode = 'webgpu'; // 'backend' or 'webgpu'
     this.whisperPipeline = null;
     this.modelLoading = false;
     this.modelLoaded = false;
+    this.backendAvailable = false;
   }
 
   setMode(mode) {
@@ -150,6 +151,38 @@ class TranscriptionService {
 
   isModelLoading() {
     return this.modelLoading;
+  }
+
+  async checkBackendAvailability() {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+      const response = await fetch('http://localhost:5001/health', {
+        method: 'GET',
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        this.backendAvailable = true;
+        console.log('Backend is available');
+        return true;
+      } else {
+        this.backendAvailable = false;
+        console.log('Backend responded with error');
+        return false;
+      }
+    } catch (error) {
+      this.backendAvailable = false;
+      console.log('Backend is not available:', error.message);
+      return false;
+    }
+  }
+
+  isBackendAvailable() {
+    return this.backendAvailable;
   }
 }
 
