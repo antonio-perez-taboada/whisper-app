@@ -267,19 +267,42 @@ function App() {
             </p>
             {mode === 'webgpu' && (
               <div className="model-selector">
-                <label htmlFor="model-select">Modelo:</label>
-                <select
-                  id="model-select"
-                  value={selectedModel}
-                  onChange={(e) => handleModelChange(e.target.value)}
-                  disabled={isRecording || isTranscribing}
-                >
-                  <option value="auto">Auto ({getModelInfo('auto').size})</option>
-                  <option value="tiny">Tiny (~40 MB) - Rápido</option>
-                  <option value="base">Base (~75 MB) - Equilibrado</option>
-                  <option value="small">Small (~150 MB) - Preciso</option>
-                </select>
-                <span className="model-desc">{getModelInfo(selectedModel).desc}</span>
+                <label className="model-selector-label">Modelo Whisper:</label>
+                <div className="model-options">
+                  <button
+                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('auto')}
+                    disabled={isRecording || isTranscribing}
+                  >
+                    <span className="model-name">Auto</span>
+                    <span className="model-size">{getModelInfo('auto').size}</span>
+                  </button>
+                  <button
+                    className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('tiny')}
+                    disabled={isRecording || isTranscribing}
+                  >
+                    <span className="model-name">Tiny</span>
+                    <span className="model-size">~40 MB</span>
+                  </button>
+                  <button
+                    className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('base')}
+                    disabled={isRecording || isTranscribing}
+                  >
+                    <span className="model-name">Base</span>
+                    <span className="model-size">~75 MB</span>
+                  </button>
+                  <button
+                    className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('small')}
+                    disabled={isRecording || isTranscribing}
+                  >
+                    <span className="model-name">Small</span>
+                    <span className="model-size">~150 MB</span>
+                  </button>
+                </div>
+                <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
               </div>
             )}
           </div>
@@ -289,19 +312,42 @@ function App() {
               🌐 Usando Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'} en tu navegador
             </p>
             <div className="model-selector">
-              <label htmlFor="model-select">Modelo:</label>
-              <select
-                id="model-select"
-                value={selectedModel}
-                onChange={(e) => handleModelChange(e.target.value)}
-                disabled={isRecording || isTranscribing}
-              >
-                <option value="auto">Auto ({getModelInfo('auto').size})</option>
-                <option value="tiny">Tiny (~40 MB) - Rápido</option>
-                <option value="base">Base (~75 MB) - Equilibrado</option>
-                <option value="small">Small (~150 MB) - Preciso</option>
-              </select>
-              <span className="model-desc">{getModelInfo(selectedModel).desc}</span>
+              <label className="model-selector-label">Modelo Whisper:</label>
+              <div className="model-options">
+                <button
+                  className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('auto')}
+                  disabled={isRecording || isTranscribing}
+                >
+                  <span className="model-name">Auto</span>
+                  <span className="model-size">{getModelInfo('auto').size}</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('tiny')}
+                  disabled={isRecording || isTranscribing}
+                >
+                  <span className="model-name">Tiny</span>
+                  <span className="model-size">~40 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('base')}
+                  disabled={isRecording || isTranscribing}
+                >
+                  <span className="model-name">Base</span>
+                  <span className="model-size">~75 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('small')}
+                  disabled={isRecording || isTranscribing}
+                >
+                  <span className="model-name">Small</span>
+                  <span className="model-size">~150 MB</span>
+                </button>
+              </div>
+              <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
             </div>
           </div>
         )}
