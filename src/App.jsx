@@ -21,6 +21,9 @@ function App() {
   const [inputLanguage, setInputLanguage] = useState('es');
   const [outputLanguage, setOutputLanguage] = useState('same');
   const [isLanguageSelectorOpen, setIsLanguageSelectorOpen] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechSynthesis, setSpeechSynthesis] = useState(null);
+  const [ttsMethod, setTtsMethod] = useState(null); // 'api' or 'local'
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -28,6 +31,7 @@ function App() {
   const animationFrameRef = useRef(null);
   const analyserRef = useRef(null);
   const timerIntervalRef = useRef(null);
+  const audioElementRef = useRef(null);
 
   useEffect(() => {
     const checkBackend = async () => {
@@ -50,6 +54,14 @@ function App() {
       }
       if (timerIntervalRef.current) {
         clearInterval(timerIntervalRef.current);
+      }
+      // Cancel any ongoing speech synthesis
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      // Stop audio element
+      if (audioElementRef.current) {
+        audioElementRef.current.pause();
       }
     };
   }, []);
@@ -280,6 +292,148 @@ function App() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const getVoiceLanguageCode = (langCode) => {
+    // Map our language codes to speech synthesis language codes
+    const voiceMap = {
+      'es': 'es',
+      'en': 'en',
+      'fr': 'fr',
+      'de': 'de',
+      'it': 'it',
+      'pt': 'pt',
+      'zh': 'zh-CN',
+      'ja': 'ja',
+      'ko': 'ko',
+      'ru': 'ru',
+      'ar': 'ar',
+      'hi': 'hi'
+    };
+    return voiceMap[langCode] || 'en';
+  };
+
+  const speakWithGoogleTTS = async (text, lang) => {
+    try {
+      // Google Translate TTS API (no API key required)
+      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encodeURIComponent(text)}`;
+
+      // Create or reuse audio element
+      if (!audioElementRef.current) {
+        audioElementRef.current = new Audio();
+      }
+
+      const audio = audioElementRef.current;
+      audio.src = url;
+
+      return new Promise((resolve, reject) => {
+        audio.onloadeddata = () => {
+          setIsSpeaking(true);
+          setTtsMethod('api');
+          console.log('Using Google TTS API (natural voice)');
+          audio.play();
+          resolve(true);
+        };
+
+        audio.onended = () => {
+          setIsSpeaking(false);
+          setTtsMethod(null);
+        };
+
+        audio.onerror = (error) => {
+          console.error('Google TTS error:', error);
+          reject(error);
+        };
+
+        // Timeout after 5 seconds
+        setTimeout(() => {
+          if (!audio.readyState || audio.readyState < 2) {
+            reject(new Error('Timeout loading audio'));
+          }
+        }, 5000);
+      });
+    } catch (error) {
+      console.error('Failed to use Google TTS:', error);
+      throw error;
+    }
+  };
+
+  const speakWithLocalVoice = (text, lang) => {
+    // Check if speech synthesis is supported
+    if (!window.speechSynthesis) {
+      alert('Tu navegador no soporta síntesis de voz');
+      return;
+    }
+
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang;
+
+    // Try to find the best voice for the selected language
+    const voices = window.speechSynthesis.getVoices();
+    const voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+
+    if (voice) {
+      utterance.voice = voice;
+    }
+
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setTtsMethod('local');
+      console.log('Using local system voice (fallback)');
+    };
+
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setTtsMethod(null);
+    };
+
+    utterance.onerror = (event) => {
+      console.error('Speech synthesis error:', event);
+      setIsSpeaking(false);
+      setTtsMethod(null);
+    };
+
+    setSpeechSynthesis(utterance);
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const speakText = async () => {
+    if (!transcription || transcription.includes('Error:') || transcription.includes('Procesando')) {
+      return;
+    }
+
+    // Determine the language for speech based on output language
+    const speechLang = outputLanguage === 'same' ? inputLanguage : outputLanguage;
+    const langCode = getVoiceLanguageCode(speechLang);
+
+    // Try Google TTS first (with internet), fallback to local voice
+    try {
+      await speakWithGoogleTTS(transcription, langCode);
+    } catch (error) {
+      // Fallback to local voice if Google TTS fails (no internet or error)
+      console.log('Falling back to local system voice');
+      speakWithLocalVoice(transcription, langCode);
+    }
+  };
+
+  const stopSpeech = () => {
+    // Stop both API and local speech
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current.currentTime = 0;
+    }
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+    setTtsMethod(null);
+  };
+
   return (
     <div className="app">
       <div className="container">
@@ -483,9 +637,40 @@ function App() {
             <div className="transcription-box">
               {transcription}
             </div>
-            <div className="copy-btn-wrapper">
+            <div className="action-buttons-wrapper">
               <button
-                className={`copy-btn ${copied ? 'copied' : ''}`}
+                className={`action-btn speak-btn ${isSpeaking ? 'speaking' : ''}`}
+                onClick={speakText}
+                disabled={isSpeaking}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                  <path d="M10 3.75a.75.75 0 00-1.264-.546L5.203 6H2.667a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75h2.536l3.533 2.796A.75.75 0 0010 16.25V3.75zM13.5 10a2.25 2.25 0 00-1.313-2.047.75.75 0 11.626-1.366A3.75 3.75 0 0115 10a3.75 3.75 0 01-2.187 3.413.75.75 0 11-.626-1.366A2.25 2.25 0 0013.5 10z"/>
+                  <path d="M14.437 5.438a.75.75 0 011.125.976 6.711 6.711 0 010 7.172.75.75 0 11-1.125-.976 5.211 5.211 0 000-5.57.75.75 0 010-.602z"/>
+                </svg>
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                  <span>{isSpeaking ? 'Reproduciendo...' : 'Escuchar'}</span>
+                  {isSpeaking && ttsMethod && (
+                    <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>
+                      {ttsMethod === 'api' ? '🌐 Voz natural (API)' : '💻 Voz local'}
+                    </span>
+                  )}
+                </span>
+              </button>
+
+              {isSpeaking && (
+                <button
+                  className="action-btn stop-speak-btn"
+                  onClick={stopSpeech}
+                >
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
+                    <rect x="6" y="6" width="8" height="8" rx="1.5" />
+                  </svg>
+                  Detener
+                </button>
+              )}
+
+              <button
+                className={`action-btn copy-btn ${copied ? 'copied' : ''}`}
                 onClick={() => {
                   navigator.clipboard.writeText(transcription);
                   setCopied(true);
