@@ -16,6 +16,7 @@ function App() {
   const [selectedModel, setSelectedModel] = useState(
     transcriptionService.isMobileDevice() ? 'base' : 'auto'
   );
+  const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -155,6 +156,7 @@ function App() {
     transcriptionService.setSelectedModel(newModel);
     setTranscription('');
     setModelLoadProgress(null);
+    setIsModelSelectorOpen(false);
   };
 
   const getModelInfo = (modelSize) => {
@@ -267,105 +269,35 @@ function App() {
                 <span>WebGPU (Navegador)</span>
               </button>
             </div>
-            <p className="mode-info">
-              {mode === 'backend'
-                ? '🖥️ Usando Whisper Medium en servidor Python'
-                : `🌐 Modelo: Whisper ${transcriptionService.getCurrentModelInfo().name} (${transcriptionService.getCurrentModelInfo().size})`}
-            </p>
-            {mode === 'webgpu' && (
-              <div className="model-selector">
-                <label className="model-selector-label">Modelo Whisper:</label>
-                <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
-                  {!transcriptionService.isMobileDevice() && (
-                    <button
-                      className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
-                      onClick={() => handleModelChange('auto')}
-                      disabled={isRecording || isTranscribing}
-                    >
-                      <span className="model-name">Auto</span>
-                      <span className="model-size">{getModelInfo('auto').size}</span>
-                    </button>
-                  )}
-                  <button
-                    className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
-                    onClick={() => handleModelChange('tiny')}
-                    disabled={isRecording || isTranscribing}
-                  >
-                    <span className="model-name">Tiny</span>
-                    <span className="model-size">~40 MB</span>
-                  </button>
-                  <button
-                    className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
-                    onClick={() => handleModelChange('base')}
-                    disabled={isRecording || isTranscribing}
-                  >
-                    <span className="model-name">Base</span>
-                    <span className="model-size">~75 MB</span>
-                  </button>
-                  <button
-                    className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
-                    onClick={() => handleModelChange('small')}
-                    disabled={isRecording || isTranscribing}
-                  >
-                    <span className="model-name">Small</span>
-                    <span className="model-size">~150 MB</span>
-                    {transcriptionService.isMobileDevice() && (
-                      <span className="model-warning">⚠️ Pesado</span>
-                    )}
-                  </button>
-                </div>
-                <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
-              </div>
+            {mode === 'webgpu' ? (
+              <button
+                className="model-info-button"
+                onClick={() => setIsModelSelectorOpen(true)}
+                disabled={isRecording || isTranscribing}
+              >
+                🌐 Modelo: Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
+                  <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
+                </svg>
+              </button>
+            ) : (
+              <p className="mode-info">
+                🖥️ Usando Whisper Medium en servidor Python
+              </p>
             )}
           </div>
         ) : (
           <div className="mode-toggle-container">
-            <p className="mode-info">
+            <button
+              className="model-info-button"
+              onClick={() => setIsModelSelectorOpen(true)}
+              disabled={isRecording || isTranscribing}
+            >
               🌐 Modelo: Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
-            </p>
-            <div className="model-selector">
-              <label className="model-selector-label">Modelo Whisper:</label>
-              <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
-                {!transcriptionService.isMobileDevice() && (
-                  <button
-                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
-                    onClick={() => handleModelChange('auto')}
-                    disabled={isRecording || isTranscribing}
-                  >
-                    <span className="model-name">Auto</span>
-                    <span className="model-size">{getModelInfo('auto').size}</span>
-                  </button>
-                )}
-                <button
-                  className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
-                  onClick={() => handleModelChange('tiny')}
-                  disabled={isRecording || isTranscribing}
-                >
-                  <span className="model-name">Tiny</span>
-                  <span className="model-size">~40 MB</span>
-                </button>
-                <button
-                  className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
-                  onClick={() => handleModelChange('base')}
-                  disabled={isRecording || isTranscribing}
-                >
-                  <span className="model-name">Base</span>
-                  <span className="model-size">~75 MB</span>
-                </button>
-                <button
-                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
-                  onClick={() => handleModelChange('small')}
-                  disabled={isRecording || isTranscribing}
-                >
-                  <span className="model-name">Small</span>
-                  <span className="model-size">~150 MB</span>
-                  {transcriptionService.isMobileDevice() && (
-                    <span className="model-warning">⚠️ Pesado</span>
-                  )}
-                </button>
-              </div>
-              <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
-            </div>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
+                <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
+              </svg>
+            </button>
           </div>
         )}
 
@@ -487,6 +419,64 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Model Selector Modal */}
+      {isModelSelectorOpen && (
+        <div className="modal-overlay" onClick={() => setIsModelSelectorOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Seleccionar Modelo</h3>
+              <button
+                className="modal-close"
+                onClick={() => setIsModelSelectorOpen(false)}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
+                {!transcriptionService.isMobileDevice() && (
+                  <button
+                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('auto')}
+                  >
+                    <span className="model-name">Auto</span>
+                    <span className="model-size">{getModelInfo('auto').size}</span>
+                  </button>
+                )}
+                <button
+                  className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('tiny')}
+                >
+                  <span className="model-name">Tiny</span>
+                  <span className="model-size">~40 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('base')}
+                >
+                  <span className="model-name">Base</span>
+                  <span className="model-size">~75 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
+                  onClick={() => handleModelChange('small')}
+                >
+                  <span className="model-name">Small</span>
+                  <span className="model-size">~150 MB</span>
+                  {transcriptionService.isMobileDevice() && (
+                    <span className="model-warning">⚠️ Pesado</span>
+                  )}
+                </button>
+              </div>
+              <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
