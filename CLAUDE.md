@@ -1,10 +1,10 @@
-# Whisper App - Project Guide
+# Transcript X - Project Guide
 
 ## Project Overview
 
-Web application for real-time voice transcription using OpenAI Whisper. Supports two transcription modes:
-- **Backend Mode**: Python Flask server with Whisper Medium model
-- **WebGPU Mode**: Browser-based transcription using Transformers.js (Whisper Small)
+Web application for real-time voice transcription using AI models. Supports two transcription modes:
+- **Backend Mode**: Python Flask server with speech-to-text Medium model
+- **WebGPU Mode**: Browser-based transcription using Transformers.js with Small model
 
 Built with React + Vite frontend with dual transcription backends.
 
@@ -14,7 +14,7 @@ Built with React + Vite frontend with dual transcription backends.
 - **React 18** - UI framework
 - **Vite** - Build tool and dev server
 - **Web Audio API** - Audio recording and visualization
-- **Transformers.js** - WebGPU-based Whisper inference in browser
+- **Transformers.js** - WebGPU-based AI inference in browser
 - **CSS3** - Modern gradients, animations, glassmorphism
 
 ### Backend (Optional - only for Backend Mode)
@@ -35,7 +35,7 @@ whisper-app/
 │   └── main.jsx                 # React entry point
 │
 ├── api-python/                  # Backend Python API (optional)
-│   ├── server.py                # Flask server with Whisper integration
+│   ├── server.py                # Flask server with AI model integration
 │   └── requirements.txt         # Python dependencies
 │
 ├── server/                      # Legacy Node.js backend (not used)
@@ -90,8 +90,8 @@ npm run dev
 #### Switching Modes
 
 Use the toggle in the UI to switch between:
-- **Backend Python**: Uses Whisper Medium model on server (better accuracy)
-- **WebGPU (Navegador)**: Uses Whisper Small in browser (no server needed, privacy-first)
+- **Backend Python**: Uses Medium model on server (better accuracy)
+- **WebGPU (Navegador)**: Uses Small model in browser (no server needed, privacy-first)
 
 ## Development Workflow
 
@@ -119,11 +119,11 @@ kill <PID>
 ```
 
 **Model loading slow (Backend Mode):**
-- First run downloads ~1.5GB Whisper Medium model
+- First run downloads ~1.5GB Medium model
 - Subsequent runs load from cache (~10-20 seconds)
 
 **Model loading slow (WebGPU Mode):**
-- First run downloads ~150MB Whisper Small model to browser cache
+- First run downloads model to browser cache (40-150 MB depending on selection)
 - Progress indicator shows download percentage
 - Subsequent runs load instantly from cache
 
@@ -141,10 +141,12 @@ kill <PID>
 - ✅ Audio recording with pause/resume
 - ✅ Real-time waveform visualization
 - ✅ Dual transcription modes (Backend Python / WebGPU)
+- ✅ Multiple model sizes (Tiny, Base, Small)
 - ✅ Spanish transcription optimized
 - ✅ Copy to clipboard
 - ✅ Recording timer
 - ✅ Model download progress indicator (WebGPU)
+- ✅ Mobile-optimized with adaptive defaults
 
 ### Architecture Notes
 
@@ -155,16 +157,16 @@ kill <PID>
 - Sends audio as WAV blob to backend OR processes locally via WebGPU
 
 **Backend Mode (Python):**
-- Loads Whisper Medium model once on startup
+- Loads Medium model once on startup
 - Receives audio files via multipart/form-data
 - Returns JSON with transcription
 - Cleans up temp files automatically
 - Better accuracy due to larger model
 
 **WebGPU Mode (Browser):**
-- Uses Transformers.js with Whisper Small model
+- Uses Transformers.js with AI models (Tiny/Base/Small)
 - Runs entirely in browser (no server needed)
-- Downloads model once (~150 MB), cached for future use
+- Downloads model once, cached for future use
 - Privacy-first: audio never leaves the device
 - Faster startup, slightly lower accuracy than Medium model
 
@@ -204,7 +206,7 @@ Check server status
 ```json
 {
   "status": "ok",
-  "message": "Servidor Whisper Python funcionando"
+  "message": "Servidor Python funcionando"
 }
 ```
 
@@ -229,13 +231,16 @@ Transcribe audio file
 - **Model Load Time**: 10-20 seconds (first time: ~2 minutes for download)
 - **Transcription Speed**: ~3-5 seconds for 10 seconds of audio
 - **Supported Audio**: Any format FFmpeg can read (WAV, MP3, M4A, etc.)
-- **Accuracy**: High (Whisper Medium model)
+- **Accuracy**: High (Medium model)
 
 ### WebGPU Mode
-- **Model Load Time**: First time ~30-60 seconds (downloading ~150 MB), then instant
+- **Model Load Time**: First time varies by model size (30-60 seconds), then instant
+  - Tiny: ~40 MB
+  - Base: ~75 MB
+  - Small: ~150 MB
 - **Transcription Speed**: ~5-8 seconds for 10 seconds of audio (varies by GPU)
 - **Supported Audio**: Browser-compatible formats (WAV, MP3, M4A, etc.)
-- **Accuracy**: Good (Whisper Small model)
+- **Accuracy**: Good to High depending on model selection
 - **Privacy**: 100% local processing, no server communication
 
 ## Environment
@@ -260,7 +265,7 @@ Transcribe audio file
 ## Future Improvements
 
 Ideas for enhancement:
-- [ ] Support for different Whisper models in WebGPU (tiny, base, medium)
+- [ ] Support for different model sizes in WebGPU (currently: Tiny, Base, Small)
 - [ ] Language selection in UI
 - [ ] Export transcription to file
 - [ ] Audio file upload (not just recording)
@@ -271,7 +276,7 @@ Ideas for enhancement:
 ## Notes
 
 ### Backend Mode
-- Whisper model runs locally on server (no external API calls, data stays private)
+- Model runs locally on server (no external API calls, data stays private)
 - GPU acceleration automatic on Apple Silicon
 - First transcription may be slow (model loading)
 - Spanish language optimized with `-l es` flag
@@ -281,3 +286,5 @@ Ideas for enhancement:
 - Data never leaves your device (maximum privacy)
 - Requires modern browser with WebGPU support
 - Models cached in browser for offline use
+- Mobile devices default to Base model for stability
+- Small model may be heavy on mobile devices (warning shown in UI)

@@ -171,7 +171,7 @@ function App() {
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
     const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
-    setTranscription(`Procesando audio con Whisper (${modeText})... Esto puede tardar unos segundos.`);
+    setTranscription(`Procesando audio con IA (${modeText})... Esto puede tardar unos segundos.`);
 
     try {
       const result = await transcriptionService.transcribe(audioBlob, (progress) => {
@@ -270,14 +270,14 @@ function App() {
                 onClick={() => setIsModelSelectorOpen(true)}
                 disabled={isRecording || isTranscribing}
               >
-                🌐 Modelo: Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
+                🌐 Modelo IA: {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
                 <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
                   <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
                 </svg>
               </button>
             ) : (
               <p className="mode-info">
-                🖥️ Usando Whisper Medium en servidor Python
+                🖥️ Servidor Python (Modelo Medium)
               </p>
             )}
           </div>
@@ -288,7 +288,7 @@ function App() {
               onClick={() => setIsModelSelectorOpen(true)}
               disabled={isRecording || isTranscribing}
             >
-              🌐 Modelo: Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
+              🌐 Modelo IA: {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
                 <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
               </svg>
@@ -369,7 +369,7 @@ function App() {
               <div className="spinner-ring"></div>
               <div className="spinner-ring"></div>
             </div>
-            <p className="loading-text">Procesando audio con Whisper...</p>
+            <p className="loading-text">Procesando audio con IA...</p>
             <p className="loading-subtext">
               {modelLoadProgress !== null
                 ? `Cargando modelo: ${modelLoadProgress}%`
@@ -377,7 +377,7 @@ function App() {
             </p>
             {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
               <p className="loading-note">
-                Primera vez: descargando modelo Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
+                Primera vez: descargando modelo IA {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
               </p>
             )}
           </div>
