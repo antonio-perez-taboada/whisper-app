@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate PWA Icons</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 2rem auto;
+      padding: 2rem;
+      background: #1a1a2e;
+      color: #fff;
+    }
+    h1 {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    button {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+      border: none;
+      padding: 1rem 2rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      cursor: pointer;
+      margin: 0.5rem;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    .icons {
+      display: flex;
+      gap: 2rem;
+      margin-top: 2rem;
+      flex-wrap: wrap;
+    }
+    .icon-item {
+      text-align: center;
+    }
+    .icon-item img {
+      border: 2px solid rgba(99, 102, 241, 0.3);
+      border-radius: 16px;
+      background: white;
+    }
+    .instructions {
+      background: rgba(99, 102, 241, 0.1);
+      padding: 1rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+      border-left: 4px solid #6366f1;
+    }
+  </style>
+</head>
+<body>
+  <h1>Generador de Iconos PWA</h1>
+
+  <div class="instructions">
+    <h3>Instrucciones:</h3>
+    <ol>
+      <li>Haz clic en "Generar Iconos"</li>
+      <li>Haz clic derecho en cada imagen → "Guardar imagen como..."</li>
+      <li>Guarda como <code>icon-192.png</code> y <code>icon-512.png</code> en la carpeta <code>public/</code></li>
+    </ol>
+  </div>
+
+  <button onclick="generateIcons()">Generar Iconos</button>
+
+  <div class="icons" id="icons"></div>
+
+  <script>
+    async function generateIcons() {
+      const sizes = [192, 512];
+      const iconsDiv = document.getElementById('icons');
+      iconsDiv.innerHTML = '';
+
+      // Load the SVG
+      const svgResponse = await fetch('/icon.svg');
+      const svgText = await svgResponse.text();
+
+      for (const size of sizes) {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+
+          ctx.drawImage(img, 0, 0, size, size);
+
+          const pngUrl = canvas.toDataURL('image/png');
+
+          const iconItem = document.createElement('div');
+          iconItem.className = 'icon-item';
+          iconItem.innerHTML = `
+            <img src="${pngUrl}" width="${Math.min(size, 192)}" height="${Math.min(size, 192)}" alt="Icon ${size}x${size}">
+            <p>icon-${size}.png</p>
+            <p style="font-size: 0.875rem; opacity: 0.7;">${size}x${size}px</p>
+          `;
+
+          iconsDiv.appendChild(iconItem);
+        };
+
+        img.src = 'data:image/svg+xml;base64,' + btoa(svgText);
+      }
+    }
+
+    // Auto-generate on load
+    window.addEventListener('load', generateIcons);
+  </script>
+</body>
+</html>

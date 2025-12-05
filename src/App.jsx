@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import './App.css';
 import { transcriptionService } from './transcriptionService';
+import InstallPrompt from './InstallPrompt';
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
@@ -472,6 +473,9 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* PWA Install Prompt */}
+      <InstallPrompt />
     </div>
   );
 }
