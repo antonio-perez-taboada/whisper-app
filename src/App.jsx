@@ -263,7 +263,7 @@ function App() {
             <p className="mode-info">
               {mode === 'backend'
                 ? '🖥️ Usando Whisper Medium en servidor Python'
-                : `🌐 Usando Whisper ${transcriptionService.isMobileDevice() ? 'Tiny' : 'Small'} en tu navegador (GPU local)`}
+                : `🌐 Modelo: Whisper ${transcriptionService.getCurrentModelInfo().name} (${transcriptionService.getCurrentModelInfo().size})`}
             </p>
             {mode === 'webgpu' && (
               <div className="model-selector">
@@ -309,7 +309,7 @@ function App() {
         ) : (
           <div className="mode-toggle-container">
             <p className="mode-info">
-              🌐 Usando Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'} en tu navegador
+              🌐 Modelo: Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
             </p>
             <div className="model-selector">
               <label className="model-selector-label">Modelo Whisper:</label>
@@ -433,7 +433,7 @@ function App() {
             </p>
             {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
               <p className="loading-note">
-                Primera vez: descargando modelo Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'}
+                Primera vez: descargando modelo Whisper {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
               </p>
             )}
           </div>

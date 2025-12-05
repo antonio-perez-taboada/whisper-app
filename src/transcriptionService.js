@@ -46,6 +46,24 @@ class TranscriptionService {
     return 'auto';
   }
 
+  getCurrentModelInfo() {
+    // Returns info about the model that will be loaded
+    const modelPath = this.getModelForDevice();
+    const modelSize = modelPath.replace('Xenova/whisper-', '');
+
+    const sizes = {
+      'tiny': '~40 MB',
+      'base': '~75 MB',
+      'small': '~150 MB'
+    };
+
+    return {
+      name: modelSize.charAt(0).toUpperCase() + modelSize.slice(1),
+      size: sizes[modelSize] || '~150 MB',
+      modelSize: modelSize
+    };
+  }
+
   setMode(mode) {
     if (mode !== 'backend' && mode !== 'webgpu') {
       throw new Error('Invalid mode. Use "backend" or "webgpu"');
