@@ -220,6 +220,31 @@ class TranscriptionService {
     }
   }
 
+  async translateText(text, sourceLang, targetLang) {
+    try {
+      // Use MyMemory Translation API (free, no API key required)
+      const response = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Translation service error');
+      }
+
+      const data = await response.json();
+
+      if (data.responseStatus === 200 || data.responseData) {
+        return data.responseData.translatedText;
+      } else {
+        throw new Error('Translation failed');
+      }
+    } catch (error) {
+      console.error('Translation error:', error);
+      // Return original text if translation fails
+      return text;
+    }
+  }
+
   async transcribeWithWebGPU(audioBlob, onProgress, languageOptions = {}) {
     console.log('Transcribing with WebGPU...', {
       size: audioBlob.size,
@@ -283,11 +308,28 @@ class TranscriptionService {
 
       console.log('WebGPU result:', result);
 
+      let finalText = result.text.trim();
+
+      // If output language is different from input and not 'same', translate the result
+      if (outputLang !== 'same' && outputLang !== inputLang) {
+        // If task was 'translate' (to English), the result is already in English
+        if (task === 'translate' && outputLang !== 'en') {
+          // Need to translate from English to target language
+          console.log(`Translating from English to ${outputLang}...`);
+          finalText = await this.translateText(finalText, 'en', outputLang);
+        } else if (task === 'transcribe') {
+          // Need to translate from input language to output language
+          console.log(`Translating from ${inputLang} to ${outputLang}...`);
+          finalText = await this.translateText(finalText, inputLang, outputLang);
+        }
+      }
+
       return {
         success: true,
-        transcription: result.text.trim(),
+        transcription: finalText,
         method: 'webgpu',
-        task: task
+        task: task,
+        translated: outputLang !== 'same' && outputLang !== inputLang
       };
     } catch (error) {
       console.error('WebGPU transcription error:', error);

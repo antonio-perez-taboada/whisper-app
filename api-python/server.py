@@ -1,12 +1,34 @@
 #!/usr/bin/env python3
 import os
 import tempfile
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import whisper
 
 app = Flask(__name__)
 CORS(app)
+
+def translate_text(text, source_lang, target_lang):
+    """Translate text using MyMemory Translation API (free, no API key required)"""
+    try:
+        url = f"https://api.mymemory.translated.net/get"
+        params = {
+            'q': text,
+            'langpair': f'{source_lang}|{target_lang}'
+        }
+        response = requests.get(url, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('responseStatus') == 200 or data.get('responseData'):
+                return data['responseData']['translatedText']
+
+        print(f"Translation failed, returning original text")
+        return text
+    except Exception as e:
+        print(f"Translation error: {str(e)}, returning original text")
+        return text
 
 print("Cargando modelo Whisper medium...")
 model = whisper.load_model("medium")
@@ -54,12 +76,17 @@ def transcribe():
 
         transcription = result['text'].strip()
 
-        # If output language is different from 'same' and 'en', we would need translation API
-        # For now, we only support Whisper's native translation to English
-        if output_language not in ['same', 'en', input_language] and task == 'transcribe':
-            # TODO: Implement translation to other languages using translation API
-            # For now, return transcription with a note
-            transcription = f"[Traducción a {output_language} no disponible aún] {transcription}"
+        # If output language is different from input and not 'same', translate the result
+        if output_language != 'same' and output_language != input_language:
+            # If task was 'translate' (to English), the result is already in English
+            if task == 'translate' and output_language != 'en':
+                # Need to translate from English to target language
+                print(f"Translating from English to {output_language}...")
+                transcription = translate_text(transcription, 'en', output_language)
+            elif task == 'transcribe':
+                # Need to translate from input language to output language
+                print(f"Translating from {input_language} to {output_language}...")
+                transcription = translate_text(transcription, input_language, output_language)
 
         print(f"Transcripción ({task}): {transcription}")
 

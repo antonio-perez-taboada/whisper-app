@@ -228,7 +228,11 @@ function App() {
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
     const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
-    setTranscription(`Procesando audio con IA (${modeText})... Esto puede tardar unos segundos.`);
+    const willTranslate = outputLanguage !== 'same' && outputLanguage !== inputLanguage;
+    const initialMessage = willTranslate
+      ? `Procesando y traduciendo audio con IA (${modeText})... Esto puede tardar unos segundos.`
+      : `Procesando audio con IA (${modeText})... Esto puede tardar unos segundos.`;
+    setTranscription(initialMessage);
 
     try {
       const result = await transcriptionService.transcribe(
@@ -257,7 +261,7 @@ function App() {
 
       if (result.success) {
         setTranscription(result.transcription);
-        console.log(`Transcription completed using ${result.method}`);
+        console.log(`Transcription completed using ${result.method}${result.translated ? ' (with translation)' : ''}`);
       } else {
         setTranscription('Error: No se pudo transcribir');
       }
