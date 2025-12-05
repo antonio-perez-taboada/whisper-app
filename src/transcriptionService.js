@@ -1,4 +1,4 @@
-import { pipeline, env } from '@xenova/transformers';
+import { env } from '@xenova/transformers';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
@@ -6,13 +6,58 @@ env.useBrowserCache = true;
 class TranscriptionService {
   constructor() {
     this.mode = 'webgpu'; // 'backend' or 'webgpu'
-    this.whisperPipeline = null;
+    this.worker = null;
     this.modelLoading = false;
     this.modelLoaded = false;
     this.backendAvailable = false;
     this.modelName = null;
     // Set default model: base for mobile, null (auto) for desktop
     this.selectedModel = this.isMobileDevice() ? 'Xenova/whisper-base' : null;
+    this.pendingCallbacks = new Map();
+    this.messageId = 0;
+  }
+
+  initWorker() {
+    if (this.worker) return;
+
+    this.worker = new Worker(
+      new URL('./transcription.worker.js', import.meta.url),
+      { type: 'module' }
+    );
+
+    this.worker.addEventListener('message', (event) => {
+      const { type, data } = event.data;
+
+      if (type === 'progress' && this.currentProgressCallback) {
+        this.currentProgressCallback(data);
+      } else if (type === 'load_complete') {
+        this.modelLoaded = true;
+        this.modelLoading = false;
+        if (this.loadResolve) {
+          this.loadResolve();
+          this.loadResolve = null;
+          this.loadReject = null;
+        }
+      } else if (type === 'transcribe_complete') {
+        if (this.transcribeResolve) {
+          this.transcribeResolve(data);
+          this.transcribeResolve = null;
+          this.transcribeReject = null;
+        }
+      } else if (type === 'error') {
+        const error = new Error(data.message);
+        if (this.loadReject) {
+          this.loadReject(error);
+          this.loadResolve = null;
+          this.loadReject = null;
+        }
+        if (this.transcribeReject) {
+          this.transcribeReject(error);
+          this.transcribeResolve = null;
+          this.transcribeReject = null;
+        }
+      }
+    });
   }
 
   isMobileDevice() {
@@ -37,7 +82,12 @@ class TranscriptionService {
     }
     // Reset model loaded state to force reload with new model
     this.modelLoaded = false;
-    this.whisperPipeline = null;
+
+    // Terminate existing worker to force model reload
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
   }
 
   getSelectedModelSize() {
@@ -81,28 +131,33 @@ class TranscriptionService {
     if (this.modelLoading) return;
 
     this.modelLoading = true;
+    this.currentProgressCallback = onProgress;
 
     try {
       this.modelName = this.getModelForDevice();
       const deviceType = this.isMobileDevice() ? 'mobile' : 'desktop';
 
-      console.log(`Loading Whisper model for ${deviceType}: ${this.modelName}`);
+      console.log(`Loading AI model for ${deviceType}: ${this.modelName}`);
 
-      this.whisperPipeline = await pipeline(
-        'automatic-speech-recognition',
-        this.modelName,
-        {
-          progress_callback: onProgress
-        }
-      );
+      // Initialize worker if not already done
+      this.initWorker();
 
-      this.modelLoaded = true;
-      console.log(`WebGPU Whisper model loaded successfully: ${this.modelName}`);
+      // Send load message to worker
+      await new Promise((resolve, reject) => {
+        this.loadResolve = resolve;
+        this.loadReject = reject;
+
+        this.worker.postMessage({
+          type: 'load',
+          data: { modelName: this.modelName }
+        });
+      });
+
+      console.log(`WebGPU model loaded successfully: ${this.modelName}`);
     } catch (error) {
       console.error('Error loading WebGPU model:', error);
-      throw error;
-    } finally {
       this.modelLoading = false;
+      throw error;
     }
   }
 
@@ -174,12 +229,24 @@ class TranscriptionService {
 
       const audioData = audioBuffer.getChannelData(0);
 
-      const result = await this.whisperPipeline(audioData, {
-        language: 'spanish',
-        task: 'transcribe',
-        chunk_length_s: 30,
-        stride_length_s: 5,
-        return_timestamps: false
+      // Send transcription request to worker
+      const result = await new Promise((resolve, reject) => {
+        this.transcribeResolve = resolve;
+        this.transcribeReject = reject;
+
+        this.worker.postMessage({
+          type: 'transcribe',
+          data: {
+            audioData: audioData,
+            options: {
+              language: 'spanish',
+              task: 'transcribe',
+              chunk_length_s: 30,
+              stride_length_s: 5,
+              return_timestamps: false
+            }
+          }
+        });
       });
 
       console.log('WebGPU result:', result);
