@@ -18,6 +18,9 @@ function App() {
     transcriptionService.isMobileDevice() ? 'base' : 'auto'
   );
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+  const [inputLanguage, setInputLanguage] = useState('es');
+  const [outputLanguage, setOutputLanguage] = useState('same');
+  const [isLanguageSelectorOpen, setIsLanguageSelectorOpen] = useState(false);
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -140,6 +143,28 @@ function App() {
     }
   };
 
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      // Remove the onstop handler to prevent transcription
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      setIsPaused(false);
+      setAudioLevel(0);
+      audioChunksRef.current = [];
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    }
+  };
+
   const handleModeChange = (newMode) => {
     setMode(newMode);
     transcriptionService.setMode(newMode);
@@ -169,28 +194,66 @@ function App() {
     return models[modelSize] || models.auto;
   };
 
+  const getInputLanguages = () => [
+    { code: 'es', name: 'Español', flag: '🇪🇸' },
+    { code: 'en', name: 'English', flag: '🇺🇸' },
+    { code: 'fr', name: 'Français', flag: '🇫🇷' },
+    { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
+    { code: 'it', name: 'Italiano', flag: '🇮🇹' },
+    { code: 'pt', name: 'Português', flag: '🇵🇹' },
+    { code: 'zh', name: '中文', flag: '🇨🇳' },
+    { code: 'ja', name: '日本語', flag: '🇯🇵' },
+    { code: 'ko', name: '한국어', flag: '🇰🇷' },
+    { code: 'ru', name: 'Русский', flag: '🇷🇺' },
+    { code: 'ar', name: 'العربية', flag: '🇸🇦' },
+    { code: 'hi', name: 'हिन्दी', flag: '🇮🇳' },
+  ];
+
+  const getOutputLanguages = () => [
+    { code: 'same', name: 'Mismo idioma', flag: '🔄' },
+    { code: 'en', name: 'English', flag: '🇺🇸' },
+    { code: 'es', name: 'Español', flag: '🇪🇸' },
+    { code: 'fr', name: 'Français', flag: '🇫🇷' },
+    { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
+    { code: 'it', name: 'Italiano', flag: '🇮🇹' },
+    { code: 'pt', name: 'Português', flag: '🇵🇹' },
+  ];
+
+  const getLanguageName = (code, type = 'input') => {
+    const languages = type === 'input' ? getInputLanguages() : getOutputLanguages();
+    const lang = languages.find(l => l.code === code);
+    return lang ? `${lang.flag} ${lang.name}` : code;
+  };
+
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
     const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
     setTranscription(`Procesando audio con IA (${modeText})... Esto puede tardar unos segundos.`);
 
     try {
-      const result = await transcriptionService.transcribe(audioBlob, (progress) => {
-        if (progress.status === 'progress') {
-          // Handle different progress formats from transformers.js
-          let percentage = 0;
+      const result = await transcriptionService.transcribe(
+        audioBlob,
+        (progress) => {
+          if (progress.status === 'progress') {
+            // Handle different progress formats from transformers.js
+            let percentage = 0;
 
-          if (progress.progress !== undefined) {
-            // progress can be 0-1 or 0-100
-            percentage = progress.progress > 1 ? progress.progress : progress.progress * 100;
-          } else if (progress.loaded && progress.total) {
-            // Calculate from bytes
-            percentage = (progress.loaded / progress.total) * 100;
+            if (progress.progress !== undefined) {
+              // progress can be 0-1 or 0-100
+              percentage = progress.progress > 1 ? progress.progress : progress.progress * 100;
+            } else if (progress.loaded && progress.total) {
+              // Calculate from bytes
+              percentage = (progress.loaded / progress.total) * 100;
+            }
+
+            setModelLoadProgress(Math.round(Math.max(0, Math.min(100, percentage))));
           }
-
-          setModelLoadProgress(Math.round(Math.max(0, Math.min(100, percentage))));
+        },
+        {
+          inputLanguage,
+          outputLanguage
         }
-      });
+      );
 
       if (result.success) {
         setTranscription(result.transcription);
@@ -297,6 +360,20 @@ function App() {
           </div>
         )}
 
+        <div className="language-selector-container">
+          <button
+            className="language-button"
+            onClick={() => setIsLanguageSelectorOpen(true)}
+            disabled={isRecording || isTranscribing}
+          >
+            <span>{getLanguageName(inputLanguage, 'input')}</span>
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" style={{margin: '0 0.5rem'}}>
+              <path d="M10 15l-5-5h10l-5 5z"/>
+            </svg>
+            <span>{getLanguageName(outputLanguage, 'output')}</span>
+          </button>
+        </div>
+
         <div className="visualizer">
           <div className="waveform">
             {[...Array(24)].map((_, i) => (
@@ -360,6 +437,18 @@ function App() {
               <rect x="9" y="9" width="10" height="10" rx="2" />
             </svg>
             <span>Detener</span>
+          </button>
+
+          <button
+            className="control-btn cancel-btn"
+            onClick={cancelRecording}
+            disabled={!isRecording}
+          >
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="9" y1="9" x2="19" y2="19" />
+              <line x1="19" y1="9" x2="9" y2="19" />
+            </svg>
+            <span>Cancelar</span>
           </button>
         </div>
 
@@ -468,6 +557,58 @@ function App() {
                 )}
               </div>
               <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Language Selector Modal */}
+      {isLanguageSelectorOpen && (
+        <div className="modal-overlay" onClick={() => setIsLanguageSelectorOpen(false)}>
+          <div className="modal-content language-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Seleccionar Idiomas</h3>
+              <button
+                className="modal-close"
+                onClick={() => setIsLanguageSelectorOpen(false)}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            <div className="modal-body">
+              <div className="language-section">
+                <h4>Idioma de entrada (audio)</h4>
+                <div className="language-grid">
+                  {getInputLanguages().map((lang) => (
+                    <button
+                      key={lang.code}
+                      className={`language-option ${inputLanguage === lang.code ? 'active' : ''}`}
+                      onClick={() => setInputLanguage(lang.code)}
+                    >
+                      <span className="language-flag">{lang.flag}</span>
+                      <span className="language-name">{lang.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="language-section">
+                <h4>Idioma de salida (transcripción)</h4>
+                <div className="language-grid">
+                  {getOutputLanguages().map((lang) => (
+                    <button
+                      key={lang.code}
+                      className={`language-option ${outputLanguage === lang.code ? 'active' : ''}`}
+                      onClick={() => setOutputLanguage(lang.code)}
+                    >
+                      <span className="language-flag">{lang.flag}</span>
+                      <span className="language-name">{lang.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>

@@ -167,14 +167,17 @@ class TranscriptionService {
     }
   }
 
-  async transcribeWithBackend(audioBlob) {
+  async transcribeWithBackend(audioBlob, languageOptions = {}) {
     console.log('Transcribing with backend...', {
       size: audioBlob.size,
-      type: audioBlob.type
+      type: audioBlob.type,
+      languageOptions
     });
 
     const formData = new FormData();
     formData.append('audio', audioBlob, 'recording.wav');
+    formData.append('inputLanguage', languageOptions.inputLanguage || 'es');
+    formData.append('outputLanguage', languageOptions.outputLanguage || 'same');
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300000);
@@ -217,10 +220,11 @@ class TranscriptionService {
     }
   }
 
-  async transcribeWithWebGPU(audioBlob, onProgress) {
+  async transcribeWithWebGPU(audioBlob, onProgress, languageOptions = {}) {
     console.log('Transcribing with WebGPU...', {
       size: audioBlob.size,
-      type: audioBlob.type
+      type: audioBlob.type,
+      languageOptions
     });
 
     if (!this.modelLoaded) {
@@ -235,6 +239,28 @@ class TranscriptionService {
 
       const audioData = audioBuffer.getChannelData(0);
 
+      // Map language codes to Whisper format
+      const languageMap = {
+        'es': 'spanish',
+        'en': 'english',
+        'fr': 'french',
+        'de': 'german',
+        'it': 'italian',
+        'pt': 'portuguese',
+        'zh': 'chinese',
+        'ja': 'japanese',
+        'ko': 'korean',
+        'ru': 'russian',
+        'ar': 'arabic',
+        'hi': 'hindi'
+      };
+
+      const inputLang = languageOptions.inputLanguage || 'es';
+      const outputLang = languageOptions.outputLanguage || 'same';
+
+      // Determine task: translate to English if outputLanguage is 'en' and different from input
+      const task = (outputLang === 'en' && outputLang !== inputLang) ? 'translate' : 'transcribe';
+
       // Send transcription request to worker
       const result = await new Promise((resolve, reject) => {
         this.transcribeResolve = resolve;
@@ -245,8 +271,8 @@ class TranscriptionService {
           data: {
             audioData: audioData,
             options: {
-              language: 'spanish',
-              task: 'transcribe',
+              language: languageMap[inputLang] || 'spanish',
+              task: task,
               chunk_length_s: 30,
               stride_length_s: 5,
               return_timestamps: false
@@ -260,7 +286,8 @@ class TranscriptionService {
       return {
         success: true,
         transcription: result.text.trim(),
-        method: 'webgpu'
+        method: 'webgpu',
+        task: task
       };
     } catch (error) {
       console.error('WebGPU transcription error:', error);
@@ -268,11 +295,11 @@ class TranscriptionService {
     }
   }
 
-  async transcribe(audioBlob, onProgress) {
+  async transcribe(audioBlob, onProgress, languageOptions = {}) {
     if (this.mode === 'backend') {
-      return await this.transcribeWithBackend(audioBlob);
+      return await this.transcribeWithBackend(audioBlob, languageOptions);
     } else {
-      return await this.transcribeWithWebGPU(audioBlob, onProgress);
+      return await this.transcribeWithWebGPU(audioBlob, onProgress, languageOptions);
     }
   }
 
