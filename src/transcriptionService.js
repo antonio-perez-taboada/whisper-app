@@ -11,6 +11,7 @@ class TranscriptionService {
     this.modelLoaded = false;
     this.backendAvailable = false;
     this.modelName = null;
+    this.selectedModel = null; // User-selected model (overrides auto-detection)
   }
 
   isMobileDevice() {
@@ -18,8 +19,31 @@ class TranscriptionService {
   }
 
   getModelForDevice() {
-    // Tiny for mobile (~40 MB), Small for desktop (~150 MB)
+    // If user selected a model, use that
+    if (this.selectedModel) {
+      return this.selectedModel;
+    }
+    // Otherwise, auto-detect: Tiny for mobile, Small for desktop
     return this.isMobileDevice() ? 'Xenova/whisper-tiny' : 'Xenova/whisper-small';
+  }
+
+  setSelectedModel(modelSize) {
+    // modelSize: 'tiny', 'base', 'small', or null for auto
+    if (modelSize === null || modelSize === 'auto') {
+      this.selectedModel = null;
+    } else {
+      this.selectedModel = `Xenova/whisper-${modelSize}`;
+    }
+    // Reset model loaded state to force reload with new model
+    this.modelLoaded = false;
+    this.whisperPipeline = null;
+  }
+
+  getSelectedModelSize() {
+    if (this.selectedModel) {
+      return this.selectedModel.replace('Xenova/whisper-', '');
+    }
+    return 'auto';
   }
 
   setMode(mode) {
@@ -94,7 +118,7 @@ class TranscriptionService {
       if (data.success) {
         return {
           success: true,
-          transcription: data.transcription,
+          transcription: data.transcription.trim(),
           method: 'backend'
         };
       } else {
@@ -143,7 +167,7 @@ class TranscriptionService {
 
       return {
         success: true,
-        transcription: result.text,
+        transcription: result.text.trim(),
         method: 'webgpu'
       };
     } catch (error) {

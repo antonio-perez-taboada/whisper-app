@@ -13,6 +13,7 @@ function App() {
   const [mode, setMode] = useState('webgpu');
   const [modelLoadProgress, setModelLoadProgress] = useState(null);
   const [backendAvailable, setBackendAvailable] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('auto');
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -142,6 +143,27 @@ function App() {
     setModelLoadProgress(null);
   };
 
+  const handleModelChange = (newModel) => {
+    setSelectedModel(newModel);
+    transcriptionService.setSelectedModel(newModel);
+    setTranscription('');
+    setModelLoadProgress(null);
+  };
+
+  const getModelInfo = (modelSize) => {
+    const models = {
+      'auto': {
+        name: 'Auto',
+        size: transcriptionService.isMobileDevice() ? '~40 MB' : '~150 MB',
+        desc: transcriptionService.isMobileDevice() ? 'Tiny en móvil, Small en desktop' : 'Optimizado para tu dispositivo'
+      },
+      'tiny': { name: 'Tiny', size: '~40 MB', desc: 'Rápido, menos preciso' },
+      'base': { name: 'Base', size: '~75 MB', desc: 'Equilibrado' },
+      'small': { name: 'Small', size: '~150 MB', desc: 'Más preciso, más lento' }
+    };
+    return models[modelSize] || models.auto;
+  };
+
   const transcribeAudio = async (audioBlob) => {
     setIsTranscribing(true);
     const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
@@ -149,8 +171,19 @@ function App() {
 
     try {
       const result = await transcriptionService.transcribe(audioBlob, (progress) => {
-        if (progress.status === 'progress' && progress.progress) {
-          setModelLoadProgress(Math.round(progress.progress));
+        if (progress.status === 'progress') {
+          // Handle different progress formats from transformers.js
+          let percentage = 0;
+
+          if (progress.progress !== undefined) {
+            // progress can be 0-1 or 0-100
+            percentage = progress.progress > 1 ? progress.progress : progress.progress * 100;
+          } else if (progress.loaded && progress.total) {
+            // Calculate from bytes
+            percentage = (progress.loaded / progress.total) * 100;
+          }
+
+          setModelLoadProgress(Math.round(Math.max(0, Math.min(100, percentage))));
         }
       });
 
@@ -232,12 +265,44 @@ function App() {
                 ? '🖥️ Usando Whisper Medium en servidor Python'
                 : `🌐 Usando Whisper ${transcriptionService.isMobileDevice() ? 'Tiny' : 'Small'} en tu navegador (GPU local)`}
             </p>
+            {mode === 'webgpu' && (
+              <div className="model-selector">
+                <label htmlFor="model-select">Modelo:</label>
+                <select
+                  id="model-select"
+                  value={selectedModel}
+                  onChange={(e) => handleModelChange(e.target.value)}
+                  disabled={isRecording || isTranscribing}
+                >
+                  <option value="auto">Auto ({getModelInfo('auto').size})</option>
+                  <option value="tiny">Tiny (~40 MB) - Rápido</option>
+                  <option value="base">Base (~75 MB) - Equilibrado</option>
+                  <option value="small">Small (~150 MB) - Preciso</option>
+                </select>
+                <span className="model-desc">{getModelInfo(selectedModel).desc}</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="mode-toggle-container">
             <p className="mode-info">
               🌐 Usando Whisper {transcriptionService.isMobileDevice() ? 'Tiny (~40 MB)' : 'Small (~150 MB)'} en tu navegador
             </p>
+            <div className="model-selector">
+              <label htmlFor="model-select">Modelo:</label>
+              <select
+                id="model-select"
+                value={selectedModel}
+                onChange={(e) => handleModelChange(e.target.value)}
+                disabled={isRecording || isTranscribing}
+              >
+                <option value="auto">Auto ({getModelInfo('auto').size})</option>
+                <option value="tiny">Tiny (~40 MB) - Rápido</option>
+                <option value="base">Base (~75 MB) - Equilibrado</option>
+                <option value="small">Small (~150 MB) - Preciso</option>
+              </select>
+              <span className="model-desc">{getModelInfo(selectedModel).desc}</span>
+            </div>
           </div>
         )}
 

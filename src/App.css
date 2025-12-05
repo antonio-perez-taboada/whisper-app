@@ -157,6 +157,58 @@ h1 {
   border: 1px solid rgba(99, 102, 241, 0.1);
 }
 
+.model-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding: 0.875rem 1.125rem;
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+}
+
+.model-selector label {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.model-selector select {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.model-selector select:hover:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+.model-selector select:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.model-selector select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-selector .model-desc {
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
 .visualizer {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
