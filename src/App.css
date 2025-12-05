@@ -177,6 +177,10 @@ h1 {
   margin-bottom: 0.75rem;
 }
 
+.model-options.mobile {
+  grid-template-columns: 1fr;
+}
+
 .model-option {
   display: flex;
   flex-direction: column;
@@ -212,6 +216,18 @@ h1 {
   transform: none;
 }
 
+.model-option.warning {
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.model-option.warning:hover:not(:disabled) {
+  border-color: rgba(251, 191, 36, 0.5);
+}
+
+.model-option.warning.active {
+  border-color: rgba(251, 191, 36, 0.6);
+}
+
 .model-name {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -222,6 +238,14 @@ h1 {
   font-size: 0.75rem;
   opacity: 0.85;
   font-weight: 500;
+}
+
+.model-warning {
+  font-size: 0.6875rem;
+  color: #fbbf24;
+  font-weight: 600;
+  margin-top: 0.125rem;
+  text-align: center;
 }
 
 .model-desc {

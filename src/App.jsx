@@ -13,7 +13,9 @@ function App() {
   const [mode, setMode] = useState('webgpu');
   const [modelLoadProgress, setModelLoadProgress] = useState(null);
   const [backendAvailable, setBackendAvailable] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('auto');
+  const [selectedModel, setSelectedModel] = useState(
+    transcriptionService.isMobileDevice() ? 'base' : 'auto'
+  );
 
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -31,6 +33,11 @@ function App() {
         transcriptionService.setMode('backend');
       }
     };
+
+    // Set default model for mobile
+    if (transcriptionService.isMobileDevice()) {
+      transcriptionService.setSelectedModel('base');
+    }
 
     checkBackend();
 
@@ -268,15 +275,17 @@ function App() {
             {mode === 'webgpu' && (
               <div className="model-selector">
                 <label className="model-selector-label">Modelo Whisper:</label>
-                <div className="model-options">
-                  <button
-                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
-                    onClick={() => handleModelChange('auto')}
-                    disabled={isRecording || isTranscribing}
-                  >
-                    <span className="model-name">Auto</span>
-                    <span className="model-size">{getModelInfo('auto').size}</span>
-                  </button>
+                <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
+                  {!transcriptionService.isMobileDevice() && (
+                    <button
+                      className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                      onClick={() => handleModelChange('auto')}
+                      disabled={isRecording || isTranscribing}
+                    >
+                      <span className="model-name">Auto</span>
+                      <span className="model-size">{getModelInfo('auto').size}</span>
+                    </button>
+                  )}
                   <button
                     className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
                     onClick={() => handleModelChange('tiny')}
@@ -294,12 +303,15 @@ function App() {
                     <span className="model-size">~75 MB</span>
                   </button>
                   <button
-                    className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
+                    className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
                     onClick={() => handleModelChange('small')}
                     disabled={isRecording || isTranscribing}
                   >
                     <span className="model-name">Small</span>
                     <span className="model-size">~150 MB</span>
+                    {transcriptionService.isMobileDevice() && (
+                      <span className="model-warning">⚠️ Pesado</span>
+                    )}
                   </button>
                 </div>
                 <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
@@ -313,15 +325,17 @@ function App() {
             </p>
             <div className="model-selector">
               <label className="model-selector-label">Modelo Whisper:</label>
-              <div className="model-options">
-                <button
-                  className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
-                  onClick={() => handleModelChange('auto')}
-                  disabled={isRecording || isTranscribing}
-                >
-                  <span className="model-name">Auto</span>
-                  <span className="model-size">{getModelInfo('auto').size}</span>
-                </button>
+              <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
+                {!transcriptionService.isMobileDevice() && (
+                  <button
+                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                    onClick={() => handleModelChange('auto')}
+                    disabled={isRecording || isTranscribing}
+                  >
+                    <span className="model-name">Auto</span>
+                    <span className="model-size">{getModelInfo('auto').size}</span>
+                  </button>
+                )}
                 <button
                   className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
                   onClick={() => handleModelChange('tiny')}
@@ -339,12 +353,15 @@ function App() {
                   <span className="model-size">~75 MB</span>
                 </button>
                 <button
-                  className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
+                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isMobileDevice() ? 'warning' : ''}`}
                   onClick={() => handleModelChange('small')}
                   disabled={isRecording || isTranscribing}
                 >
                   <span className="model-name">Small</span>
                   <span className="model-size">~150 MB</span>
+                  {transcriptionService.isMobileDevice() && (
+                    <span className="model-warning">⚠️ Pesado</span>
+                  )}
                 </button>
               </div>
               <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
