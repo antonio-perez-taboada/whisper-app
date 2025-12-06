@@ -74,7 +74,9 @@ def transcribe():
 
         os.unlink(temp_path)
 
-        transcription = result['text'].strip()
+        original_text = result['text'].strip()
+        translated_text = None
+        final_transcription = original_text
 
         # If output language is different from input and not 'same', translate the result
         if output_language != 'same' and output_language != input_language:
@@ -82,18 +84,25 @@ def transcribe():
             if task == 'translate' and output_language != 'en':
                 # Need to translate from English to target language
                 print(f"Translating from English to {output_language}...")
-                transcription = translate_text(transcription, 'en', output_language)
+                translated_text = translate_text(original_text, 'en', output_language)
+                final_transcription = translated_text
             elif task == 'transcribe':
                 # Need to translate from input language to output language
                 print(f"Translating from {input_language} to {output_language}...")
-                transcription = translate_text(transcription, input_language, output_language)
+                translated_text = translate_text(original_text, input_language, output_language)
+                final_transcription = translated_text
 
-        print(f"Transcripción ({task}): {transcription}")
+        print(f"Transcripción ({task}): {final_transcription}")
 
-        return jsonify({
+        response_data = {
             'success': True,
-            'transcription': transcription
-        })
+            'transcription': final_transcription,
+            'originalText': original_text,
+            'translatedText': translated_text,
+            'translated': translated_text is not None
+        }
+
+        return jsonify(response_data)
 
     except Exception as e:
         print(f"Error al transcribir: {str(e)}")
