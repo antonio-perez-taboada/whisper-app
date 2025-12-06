@@ -202,7 +202,10 @@ class TranscriptionService {
         return {
           success: true,
           transcription: data.transcription.trim(),
-          method: 'backend'
+          originalText: data.originalText ? data.originalText.trim() : null,
+          translatedText: data.translatedText ? data.translatedText.trim() : null,
+          method: 'backend',
+          translated: data.translated || false
         };
       } else {
         throw new Error(data.error || 'Transcription failed');
@@ -308,7 +311,9 @@ class TranscriptionService {
 
       console.log('WebGPU result:', result);
 
-      let finalText = result.text.trim();
+      let originalText = result.text.trim();
+      let translatedText = null;
+      let finalText = originalText;
 
       // If output language is different from input and not 'same', translate the result
       if (outputLang !== 'same' && outputLang !== inputLang) {
@@ -316,17 +321,21 @@ class TranscriptionService {
         if (task === 'translate' && outputLang !== 'en') {
           // Need to translate from English to target language
           console.log(`Translating from English to ${outputLang}...`);
-          finalText = await this.translateText(finalText, 'en', outputLang);
+          translatedText = await this.translateText(originalText, 'en', outputLang);
+          finalText = translatedText;
         } else if (task === 'transcribe') {
           // Need to translate from input language to output language
           console.log(`Translating from ${inputLang} to ${outputLang}...`);
-          finalText = await this.translateText(finalText, inputLang, outputLang);
+          translatedText = await this.translateText(originalText, inputLang, outputLang);
+          finalText = translatedText;
         }
       }
 
       return {
         success: true,
         transcription: finalText,
+        originalText: originalText,
+        translatedText: translatedText,
         method: 'webgpu',
         task: task,
         translated: outputLang !== 'same' && outputLang !== inputLang

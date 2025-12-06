@@ -7,6 +7,8 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [transcription, setTranscription] = useState('');
+  const [originalText, setOriginalText] = useState('');
+  const [translatedText, setTranslatedText] = useState('');
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
@@ -273,9 +275,22 @@ function App() {
 
       if (result.success) {
         setTranscription(result.transcription);
+
+        // Store both original and translated text
+        if (result.translated && result.originalText && result.translatedText) {
+          setOriginalText(result.originalText);
+          setTranslatedText(result.translatedText);
+        } else {
+          // No translation, just original text
+          setOriginalText(result.originalText || result.transcription);
+          setTranslatedText('');
+        }
+
         console.log(`Transcription completed using ${result.method}${result.translated ? ' (with translation)' : ''}`);
       } else {
         setTranscription('Error: No se pudo transcribir');
+        setOriginalText('');
+        setTranslatedText('');
       }
     } catch (error) {
       console.error('Transcription error:', error);
@@ -407,17 +422,20 @@ function App() {
       return;
     }
 
+    // Use the output language text (translated if available, otherwise original)
+    const textToSpeak = translatedText || transcription;
+
     // Determine the language for speech based on output language
     const speechLang = outputLanguage === 'same' ? inputLanguage : outputLanguage;
     const langCode = getVoiceLanguageCode(speechLang);
 
     // Try Google TTS first (with internet), fallback to local voice
     try {
-      await speakWithGoogleTTS(transcription, langCode);
+      await speakWithGoogleTTS(textToSpeak, langCode);
     } catch (error) {
       // Fallback to local voice if Google TTS fails (no internet or error)
       console.log('Falling back to local system voice');
-      speakWithLocalVoice(transcription, langCode);
+      speakWithLocalVoice(textToSpeak, langCode);
     }
   };
 
@@ -631,12 +649,31 @@ function App() {
           </div>
         ) : transcription && (
           <div className="transcription-container">
-            <div className="transcription-header">
-              <h2>Transcripción</h2>
-            </div>
-            <div className="transcription-box">
-              {transcription}
-            </div>
+            {translatedText ? (
+              <>
+                <div className="transcription-header">
+                  <h2>{getLanguageName(inputLanguage, 'input')} (Original)</h2>
+                </div>
+                <div className="transcription-box">
+                  {originalText}
+                </div>
+                <div className="transcription-header" style={{marginTop: '1rem'}}>
+                  <h2>{getLanguageName(outputLanguage, 'output')} (Traducción)</h2>
+                </div>
+                <div className="transcription-box">
+                  {translatedText}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="transcription-header">
+                  <h2>Transcripción</h2>
+                </div>
+                <div className="transcription-box">
+                  {transcription}
+                </div>
+              </>
+            )}
             <div className="action-buttons-wrapper">
               <button
                 className={`action-btn speak-btn ${isSpeaking ? 'speaking' : ''}`}
@@ -672,7 +709,9 @@ function App() {
               <button
                 className={`action-btn copy-btn ${copied ? 'copied' : ''}`}
                 onClick={() => {
-                  navigator.clipboard.writeText(transcription);
+                  // Copy only the output language text
+                  const textToCopy = translatedText || transcription;
+                  navigator.clipboard.writeText(textToCopy);
                   setCopied(true);
                   setTimeout(() => setCopied(false), 2000);
                 }}
