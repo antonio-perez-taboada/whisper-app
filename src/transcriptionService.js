@@ -3,6 +3,9 @@ import { env } from '@xenova/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+// Reset worker after this many transcriptions to prevent memory leaks
+const MAX_TRANSCRIPTIONS_BEFORE_RESET = 5;
+
 class TranscriptionService {
   constructor() {
     this.mode = 'webgpu'; // 'backend' or 'webgpu'
@@ -15,6 +18,7 @@ class TranscriptionService {
     this.selectedModel = this.isMobileDevice() ? 'Xenova/whisper-base' : null;
     this.pendingCallbacks = new Map();
     this.messageId = 0;
+    this.transcriptionCount = 0; // Track transcriptions for auto-reset
   }
 
   initWorker() {
@@ -151,6 +155,39 @@ class TranscriptionService {
 
   getMode() {
     return this.mode;
+  }
+
+  // Reset worker to free memory (workaround for WebGPU memory leak)
+  async resetWorker() {
+    console.log('Resetting worker to free memory...');
+
+    if (this.worker) {
+      // Send dispose message first
+      try {
+        await new Promise((resolve) => {
+          const timeout = setTimeout(resolve, 1000); // Timeout after 1s
+          const handler = (event) => {
+            if (event.data.type === 'dispose_complete') {
+              clearTimeout(timeout);
+              this.worker.removeEventListener('message', handler);
+              resolve();
+            }
+          };
+          this.worker.addEventListener('message', handler);
+          this.worker.postMessage({ type: 'dispose' });
+        });
+      } catch (e) {
+        console.warn('Error disposing pipeline:', e);
+      }
+
+      // Terminate worker
+      this.worker.terminate();
+      this.worker = null;
+    }
+
+    this.modelLoaded = false;
+    this.transcriptionCount = 0;
+    console.log('Worker reset complete');
   }
 
   async initWebGPUModel(onProgress) {
@@ -332,6 +369,13 @@ class TranscriptionService {
 
       console.log('WebGPU result:', result);
 
+      // Increment transcription count and check for reset
+      this.transcriptionCount++;
+      console.log(`Transcription count: ${this.transcriptionCount}/${MAX_TRANSCRIPTIONS_BEFORE_RESET}`);
+
+      // Schedule worker reset if we've hit the limit (do it after returning result)
+      const shouldReset = this.transcriptionCount >= MAX_TRANSCRIPTIONS_BEFORE_RESET;
+
       let originalText = result.text.trim();
       let translatedText = null;
       let finalText = originalText;
@@ -352,7 +396,7 @@ class TranscriptionService {
         }
       }
 
-      return {
+      const resultData = {
         success: true,
         transcription: finalText,
         originalText: originalText,
@@ -361,6 +405,19 @@ class TranscriptionService {
         task: task,
         translated: outputLang !== 'same' && outputLang !== inputLang
       };
+
+      // Reset worker asynchronously if needed (doesn't block the return)
+      if (shouldReset) {
+        console.log('Scheduling worker reset to free memory...');
+        // Use setTimeout to reset after returning the result
+        setTimeout(() => {
+          this.resetWorker().catch(err => {
+            console.error('Error during automatic worker reset:', err);
+          });
+        }, 100);
+      }
+
+      return resultData;
     } catch (error) {
       console.error('WebGPU transcription error:', error);
       throw error;
