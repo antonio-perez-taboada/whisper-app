@@ -1263,17 +1263,24 @@ function App() {
                   <span className="model-name">Base</span>
                   <span className="model-size">~75 MB</span>
                 </button>
-                {!transcriptionService.isMobileDevice() && (
-                  <button
-                    className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
-                    onClick={() => handleModelChange('small')}
-                  >
-                    <span className="model-name">Small</span>
-                    <span className="model-size">~150 MB</span>
-                  </button>
-                )}
+                <button
+                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isSmallModelRisky() ? 'warning' : ''}`}
+                  onClick={() => handleModelChange('small')}
+                >
+                  <span className="model-name">Small</span>
+                  <span className="model-size">~150 MB</span>
+                  {transcriptionService.isSmallModelRisky() && (
+                    <span className="model-warning">Requiere 4GB+ RAM</span>
+                  )}
+                </button>
               </div>
               <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
+              {selectedModel === 'small' && transcriptionService.isSmallModelRisky() && (
+                <p className="model-warning-text">
+                  Este modelo puede causar problemas en dispositivos con menos de 4GB de RAM.
+                  Si experimentas errores, usa Base o Tiny.
+                </p>
+              )}
             </div>
           </div>
         </div>

@@ -289,6 +289,18 @@ h1 {
   border: 1px solid rgba(99, 102, 241, 0.08);
 }
 
+.model-warning-text {
+  text-align: center;
+  color: #fbbf24;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin: 0.75rem 0 0 0;
+  padding: 0.75rem;
+  background: rgba(251, 191, 36, 0.1);
+  border-radius: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+}
+
 .visualizer {
   background: var(--bg-card);
   border: 1px solid var(--border-color);

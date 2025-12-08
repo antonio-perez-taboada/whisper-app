@@ -64,6 +64,29 @@ class TranscriptionService {
     return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   }
 
+  // Get device memory in GB (returns undefined if not supported)
+  getDeviceMemory() {
+    return navigator.deviceMemory; // Returns RAM in GB (Chrome/Edge only)
+  }
+
+  // Check if device has enough memory for Small model (4GB+ recommended)
+  hasEnoughMemoryForSmall() {
+    const memory = this.getDeviceMemory();
+    if (memory === undefined) {
+      // Can't detect memory, assume it might work on desktop, risky on mobile
+      return !this.isMobileDevice();
+    }
+    return memory >= 4;
+  }
+
+  // Check if Small model is risky for this device
+  isSmallModelRisky() {
+    if (!this.isMobileDevice()) return false;
+    const memory = this.getDeviceMemory();
+    // Risky if mobile and memory < 4GB or unknown
+    return memory === undefined || memory < 4;
+  }
+
   getModelForDevice() {
     // If user selected a model, use that
     if (this.selectedModel) {
@@ -78,13 +101,11 @@ class TranscriptionService {
     if (modelSize === null || modelSize === 'auto') {
       this.selectedModel = null;
     } else {
-      // Prevent Small model on mobile devices (causes crashes due to memory limits)
+      // Allow Small on mobile but log warning
       if (modelSize === 'small' && this.isMobileDevice()) {
-        console.warn('Small model not supported on mobile devices, using Base instead');
-        this.selectedModel = 'Xenova/whisper-base';
-      } else {
-        this.selectedModel = `Xenova/whisper-${modelSize}`;
+        console.warn('Small model on mobile device - may cause memory issues on devices with < 4GB RAM');
       }
+      this.selectedModel = `Xenova/whisper-${modelSize}`;
     }
     // Reset model loaded state to force reload with new model
     this.modelLoaded = false;
