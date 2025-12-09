@@ -3,6 +3,9 @@ import { env } from '@xenova/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
+// Reset worker after this many transcriptions to prevent memory leaks
+const MAX_TRANSCRIPTIONS_BEFORE_RESET = 5;
+
 class TranscriptionService {
   constructor() {
     this.mode = 'webgpu'; // 'backend' or 'webgpu'
@@ -15,6 +18,7 @@ class TranscriptionService {
     this.selectedModel = this.isMobileDevice() ? 'Xenova/whisper-base' : null;
     this.pendingCallbacks = new Map();
     this.messageId = 0;
+    this.transcriptionCount = 0; // Track transcriptions for auto-reset
   }
 
   initWorker() {
@@ -64,6 +68,29 @@ class TranscriptionService {
     return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   }
 
+  // Get device memory in GB (returns undefined if not supported)
+  getDeviceMemory() {
+    return navigator.deviceMemory; // Returns RAM in GB (Chrome/Edge only)
+  }
+
+  // Check if device has enough memory for Small model (4GB+ recommended)
+  hasEnoughMemoryForSmall() {
+    const memory = this.getDeviceMemory();
+    if (memory === undefined) {
+      // Can't detect memory, assume it might work on desktop, risky on mobile
+      return !this.isMobileDevice();
+    }
+    return memory >= 4;
+  }
+
+  // Check if Small model is risky for this device
+  isSmallModelRisky() {
+    if (!this.isMobileDevice()) return false;
+    const memory = this.getDeviceMemory();
+    // Risky if mobile and memory < 4GB or unknown
+    return memory === undefined || memory < 4;
+  }
+
   getModelForDevice() {
     // If user selected a model, use that
     if (this.selectedModel) {
@@ -78,13 +105,11 @@ class TranscriptionService {
     if (modelSize === null || modelSize === 'auto') {
       this.selectedModel = null;
     } else {
-      // Prevent Small model on mobile devices (causes crashes due to memory limits)
+      // Allow Small on mobile but log warning
       if (modelSize === 'small' && this.isMobileDevice()) {
-        console.warn('Small model not supported on mobile devices, using Base instead');
-        this.selectedModel = 'Xenova/whisper-base';
-      } else {
-        this.selectedModel = `Xenova/whisper-${modelSize}`;
+        console.warn('Small model on mobile device - may cause memory issues on devices with < 4GB RAM');
       }
+      this.selectedModel = `Xenova/whisper-${modelSize}`;
     }
     // Reset model loaded state to force reload with new model
     this.modelLoaded = false;
@@ -130,6 +155,39 @@ class TranscriptionService {
 
   getMode() {
     return this.mode;
+  }
+
+  // Reset worker to free memory (workaround for WebGPU memory leak)
+  async resetWorker() {
+    console.log('Resetting worker to free memory...');
+
+    if (this.worker) {
+      // Send dispose message first
+      try {
+        await new Promise((resolve) => {
+          const timeout = setTimeout(resolve, 1000); // Timeout after 1s
+          const handler = (event) => {
+            if (event.data.type === 'dispose_complete') {
+              clearTimeout(timeout);
+              this.worker.removeEventListener('message', handler);
+              resolve();
+            }
+          };
+          this.worker.addEventListener('message', handler);
+          this.worker.postMessage({ type: 'dispose' });
+        });
+      } catch (e) {
+        console.warn('Error disposing pipeline:', e);
+      }
+
+      // Terminate worker
+      this.worker.terminate();
+      this.worker = null;
+    }
+
+    this.modelLoaded = false;
+    this.transcriptionCount = 0;
+    console.log('Worker reset complete');
   }
 
   async initWebGPUModel(onProgress) {
@@ -311,6 +369,13 @@ class TranscriptionService {
 
       console.log('WebGPU result:', result);
 
+      // Increment transcription count and check for reset
+      this.transcriptionCount++;
+      console.log(`Transcription count: ${this.transcriptionCount}/${MAX_TRANSCRIPTIONS_BEFORE_RESET}`);
+
+      // Schedule worker reset if we've hit the limit (do it after returning result)
+      const shouldReset = this.transcriptionCount >= MAX_TRANSCRIPTIONS_BEFORE_RESET;
+
       let originalText = result.text.trim();
       let translatedText = null;
       let finalText = originalText;
@@ -331,7 +396,7 @@ class TranscriptionService {
         }
       }
 
-      return {
+      const resultData = {
         success: true,
         transcription: finalText,
         originalText: originalText,
@@ -340,6 +405,19 @@ class TranscriptionService {
         task: task,
         translated: outputLang !== 'same' && outputLang !== inputLang
       };
+
+      // Reset worker asynchronously if needed (doesn't block the return)
+      if (shouldReset) {
+        console.log('Scheduling worker reset to free memory...');
+        // Use setTimeout to reset after returning the result
+        setTimeout(() => {
+          this.resetWorker().catch(err => {
+            console.error('Error during automatic worker reset:', err);
+          });
+        }, 100);
+      }
+
+      return resultData;
     } catch (error) {
       console.error('WebGPU transcription error:', error);
       throw error;
@@ -396,6 +474,141 @@ class TranscriptionService {
 
   getModelName() {
     return this.modelName;
+  }
+
+  // Check WebGPU support
+  async checkWebGPUSupport() {
+    try {
+      if (!navigator.gpu) {
+        return { supported: false, reason: 'WebGPU API not available in this browser' };
+      }
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        return { supported: false, reason: 'No WebGPU adapter found' };
+      }
+      return { supported: true, adapter };
+    } catch (error) {
+      return { supported: false, reason: error.message };
+    }
+  }
+
+  // Get cached models from Cache API
+  async getCachedModels() {
+    try {
+      const cache = await caches.open('transformers-cache');
+      const keys = await cache.keys();
+
+      const models = new Map();
+
+      for (const request of keys) {
+        const url = request.url;
+        // Extract model name from URL (e.g., Xenova/whisper-tiny)
+        const match = url.match(/huggingface\.co\/([^/]+\/whisper-[^/]+)/);
+        if (match) {
+          const modelName = match[1];
+          if (!models.has(modelName)) {
+            models.set(modelName, { files: [], totalSize: 0 });
+          }
+
+          // Try to get file size from cache
+          const response = await cache.match(request);
+          if (response) {
+            const blob = await response.clone().blob();
+            models.get(modelName).files.push({
+              url: url,
+              size: blob.size
+            });
+            models.get(modelName).totalSize += blob.size;
+          }
+        }
+      }
+
+      // Convert to array with formatted info
+      const result = [];
+      for (const [name, data] of models) {
+        const size = data.totalSize;
+        const sizeFormatted = size > 1024 * 1024
+          ? `${(size / (1024 * 1024)).toFixed(1)} MB`
+          : `${(size / 1024).toFixed(1)} KB`;
+
+        result.push({
+          name: name,
+          displayName: name.replace('Xenova/whisper-', '').charAt(0).toUpperCase() +
+                       name.replace('Xenova/whisper-', '').slice(1),
+          size: size,
+          sizeFormatted: sizeFormatted,
+          fileCount: data.files.length
+        });
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Error getting cached models:', error);
+      return [];
+    }
+  }
+
+  // Delete a specific model from cache
+  async deleteCachedModel(modelName) {
+    try {
+      const cache = await caches.open('transformers-cache');
+      const keys = await cache.keys();
+
+      let deletedCount = 0;
+      for (const request of keys) {
+        if (request.url.includes(modelName)) {
+          await cache.delete(request);
+          deletedCount++;
+        }
+      }
+
+      // If this was the currently loaded model, reset state
+      if (this.modelName === modelName) {
+        this.modelLoaded = false;
+        this.modelName = null;
+        if (this.worker) {
+          this.worker.terminate();
+          this.worker = null;
+        }
+      }
+
+      console.log(`Deleted ${deletedCount} files for model ${modelName}`);
+      return { success: true, deletedCount };
+    } catch (error) {
+      console.error('Error deleting cached model:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Clear all cached models
+  async clearAllCachedModels() {
+    try {
+      await caches.delete('transformers-cache');
+
+      // Reset state
+      this.modelLoaded = false;
+      this.modelName = null;
+      if (this.worker) {
+        this.worker.terminate();
+        this.worker = null;
+      }
+
+      console.log('All cached models cleared');
+      return { success: true };
+    } catch (error) {
+      console.error('Error clearing cached models:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Get total cache size
+  async getTotalCacheSize() {
+    const models = await this.getCachedModels();
+    const total = models.reduce((sum, model) => sum + model.size, 0);
+    const formatted = total > 1024 * 1024
+      ? `${(total / (1024 * 1024)).toFixed(1)} MB`
+      : `${(total / 1024).toFixed(1)} KB`;
+    return { bytes: total, formatted };
   }
 }
 
