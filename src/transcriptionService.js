@@ -136,12 +136,14 @@ class TranscriptionService {
     const sizes = {
       'tiny': '~40 MB',
       'base': '~75 MB',
-      'small': '~150 MB'
+      'small': '~240 MB',
+      'medium': '~470 MB',
+      'large': '~1.5 GB'
     };
 
     return {
       name: modelSize.charAt(0).toUpperCase() + modelSize.slice(1),
-      size: sizes[modelSize] || '~150 MB',
+      size: sizes[modelSize] || '~240 MB',
       modelSize: modelSize
     };
   }

@@ -4,7 +4,7 @@
 
 Web application for real-time voice transcription using AI models. Supports two transcription modes:
 - **Backend Mode**: Python Flask server with speech-to-text Medium model
-- **WebGPU Mode**: Browser-based transcription using Transformers.js with Small model
+- **WebGPU Mode**: Browser-based transcription using Transformers.js with multiple model sizes (Tiny, Base, Small, Medium, Large)
 
 Built with React + Vite frontend with dual transcription backends.
 
@@ -91,7 +91,7 @@ npm run dev
 
 Use the toggle in the UI to switch between:
 - **Backend Python**: Uses Medium model on server (better accuracy)
-- **WebGPU (Navegador)**: Uses Small model in browser (no server needed, privacy-first)
+- **WebGPU (Navegador)**: Uses Whisper models in browser with selectable sizes (no server needed, privacy-first)
 
 ## Development Workflow
 
@@ -123,7 +123,7 @@ kill <PID>
 - Subsequent runs load from cache (~10-20 seconds)
 
 **Model loading slow (WebGPU Mode):**
-- First run downloads model to browser cache (40-150 MB depending on selection)
+- First run downloads model to browser cache (40 MB - 1.5 GB depending on selection)
 - Progress indicator shows download percentage
 - Subsequent runs load instantly from cache
 
@@ -141,12 +141,13 @@ kill <PID>
 - ✅ Audio recording with pause/resume
 - ✅ Real-time waveform visualization
 - ✅ Dual transcription modes (Backend Python / WebGPU)
-- ✅ Multiple model sizes (Tiny, Base, Small)
+- ✅ Multiple model sizes (Tiny, Base, Small, Medium, Large)
 - ✅ Spanish transcription optimized
 - ✅ Copy to clipboard
 - ✅ Recording timer
 - ✅ Model download progress indicator (WebGPU)
 - ✅ Mobile-optimized with adaptive defaults
+- ✅ All models available on mobile devices (user choice)
 
 ### Architecture Notes
 
@@ -234,14 +235,17 @@ Transcribe audio file
 - **Accuracy**: High (Medium model)
 
 ### WebGPU Mode
-- **Model Load Time**: First time varies by model size (30-60 seconds), then instant
+- **Model Load Time**: First time varies by model size (30-120 seconds), then instant
   - Tiny: ~40 MB
   - Base: ~75 MB
-  - Small: ~150 MB
-- **Transcription Speed**: ~5-8 seconds for 10 seconds of audio (varies by GPU)
+  - Small: ~240 MB
+  - Medium: ~470 MB
+  - Large: ~1.5 GB
+- **Transcription Speed**: ~5-8 seconds for 10 seconds of audio (varies by GPU and model size)
 - **Supported Audio**: Browser-compatible formats (WAV, MP3, M4A, etc.)
-- **Accuracy**: Good to High depending on model selection
+- **Accuracy**: Good to Excellent depending on model selection (larger models = higher accuracy)
 - **Privacy**: 100% local processing, no server communication
+- **Note**: Larger models (Medium, Large) may cause memory issues on mobile devices with limited RAM
 
 ## Environment
 
@@ -287,4 +291,5 @@ Ideas for enhancement:
 - Requires modern browser with WebGPU support
 - Models cached in browser for offline use
 - Mobile devices default to Base model for stability
-- Small model may be heavy on mobile devices (warning shown in UI)
+- All model sizes available on mobile (Tiny, Base, Small, Medium, Large)
+- Larger models (Medium, Large) may cause memory issues on mobile devices (warning shown in UI)
