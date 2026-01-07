@@ -274,12 +274,14 @@ function App() {
     const models = {
       'auto': {
         name: 'Auto',
-        size: transcriptionService.isMobileDevice() ? '~40 MB' : '~150 MB',
+        size: transcriptionService.isMobileDevice() ? '~40 MB' : '~240 MB',
         desc: transcriptionService.isMobileDevice() ? 'Tiny en móvil, Small en desktop' : 'Optimizado para tu dispositivo'
       },
       'tiny': { name: 'Tiny', size: '~40 MB', desc: 'Rápido, menos preciso' },
       'base': { name: 'Base', size: '~75 MB', desc: 'Equilibrado' },
-      'small': { name: 'Small', size: '~150 MB', desc: 'Más preciso, más lento' }
+      'small': { name: 'Small', size: '~240 MB', desc: 'Preciso, más lento' },
+      'medium': { name: 'Medium', size: '~470 MB', desc: 'Muy preciso, requiere más tiempo y memoria' },
+      'large': { name: 'Large', size: '~1.5 GB', desc: 'Máxima precisión, requiere mucha memoria y tiempo' }
     };
     return models[modelSize] || models.auto;
   };
@@ -1239,7 +1241,7 @@ function App() {
               </button>
             </div>
             <div className="modal-body">
-              <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
+              <div className="model-options">
                 {!transcriptionService.isMobileDevice() && (
                   <button
                     className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
@@ -1264,21 +1266,32 @@ function App() {
                   <span className="model-size">~75 MB</span>
                 </button>
                 <button
-                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isSmallModelRisky() ? 'warning' : ''}`}
+                  className={`model-option ${selectedModel === 'small' ? 'active' : ''}`}
                   onClick={() => handleModelChange('small')}
                 >
                   <span className="model-name">Small</span>
-                  <span className="model-size">~150 MB</span>
-                  {transcriptionService.isSmallModelRisky() && (
-                    <span className="model-warning">Requiere 4GB+ RAM</span>
-                  )}
+                  <span className="model-size">~240 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'medium' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('medium')}
+                >
+                  <span className="model-name">Medium</span>
+                  <span className="model-size">~470 MB</span>
+                </button>
+                <button
+                  className={`model-option ${selectedModel === 'large' ? 'active' : ''}`}
+                  onClick={() => handleModelChange('large')}
+                >
+                  <span className="model-name">Large</span>
+                  <span className="model-size">~1.5 GB</span>
                 </button>
               </div>
               <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
-              {selectedModel === 'small' && transcriptionService.isSmallModelRisky() && (
+              {transcriptionService.isMobileDevice() && (selectedModel === 'medium' || selectedModel === 'large') && (
                 <p className="model-warning-text">
-                  Este modelo puede causar problemas en dispositivos con menos de 4GB de RAM.
-                  Si experimentas errores, usa Base o Tiny.
+                  Modelos grandes pueden causar problemas de memoria en dispositivos móviles.
+                  Si experimentas errores, usa Small, Base o Tiny.
                 </p>
               )}
             </div>
