@@ -23,22 +23,31 @@ class TranscriptionWorker {
 
     this.modelName = modelName;
 
-    // Determine if we should use quantization based on model size
-    // Small model benefits from quantization to reduce memory usage
+    // Determine quantization strategy based on model size
     const isSmallModel = modelName.includes('whisper-small');
+    const isMediumModel = modelName.includes('whisper-medium');
+    const isLargeModel = modelName.includes('whisper-large');
 
     const pipelineOptions = {
       progress_callback: progressCallback,
     };
 
-    // For Small model, use mixed precision to reduce memory
-    // Encoder needs fp32 for accuracy, decoder can use q4 for memory savings
-    if (isSmallModel) {
+    // Apply quantization for larger models to reduce memory usage
+    // Small/Medium/Large models benefit from quantization to fit in GPU memory
+    if (isSmallModel || isMediumModel) {
+      // Mixed precision: fp32 encoder for accuracy, q4 decoder for memory
       pipelineOptions.dtype = {
         encoder_model: 'fp32',
         decoder_model_merged: 'q4',
       };
-      console.log('Using quantized model (encoder: fp32, decoder: q4) for memory optimization');
+      console.log(`Using quantized model (encoder: fp32, decoder: q4) for ${modelName}`);
+    } else if (isLargeModel) {
+      // Large model needs aggressive quantization: q4 for both encoder and decoder
+      pipelineOptions.dtype = {
+        encoder_model: 'q4',
+        decoder_model_merged: 'q4',
+      };
+      console.log(`Using aggressive quantization (encoder: q4, decoder: q4) for ${modelName}`);
     }
 
     this.pipeline = await pipeline(
