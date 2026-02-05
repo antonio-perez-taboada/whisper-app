@@ -7,6 +7,7 @@ const MAX_TRANSCRIPTIONS_BEFORE_RESET = 5;
 
 // Whisper supported languages (subset for UI)
 const WHISPER_LANGUAGES = [
+  { code: 'auto', name: 'Auto Detect', whisper: null },
   { code: 'es', name: 'Spanish', whisper: 'spanish' },
   { code: 'en', name: 'English', whisper: 'english' },
   { code: 'fr', name: 'French', whisper: 'french' },
@@ -177,6 +178,7 @@ class TranscriptionService {
   }
 
   getWhisperLanguageName(code) {
+    if (code === 'auto') return null;
     const lang = WHISPER_LANGUAGES.find(l => l.code === code);
     return lang ? lang.whisper : 'spanish';
   }
@@ -234,9 +236,14 @@ class TranscriptionService {
   async transcribeWithBackend(audioBlob, languageOptions = {}) {
     const formData = new FormData();
     formData.append('audio', audioBlob, 'recording.wav');
-    formData.append('inputLanguage', languageOptions.inputLanguage || 'es');
-    // Only 'transcribe' or 'translate' (to English) - no external API
+
+    const inputLang = languageOptions.inputLanguage || 'es';
+    // For auto-detect, don't send language so Whisper detects it
+    if (inputLang !== 'auto') {
+      formData.append('inputLanguage', inputLang);
+    }
     formData.append('task', languageOptions.task || 'transcribe');
+    formData.append('timestamps', languageOptions.timestamps ? 'true' : 'false');
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300000);
@@ -260,6 +267,8 @@ class TranscriptionService {
         return {
           success: true,
           transcription: data.transcription.trim(),
+          segments: data.segments || null,
+          detectedLanguage: data.detected_language || null,
           method: 'backend',
           task: languageOptions.task || 'transcribe'
         };
@@ -289,6 +298,19 @@ class TranscriptionService {
 
       const inputLang = languageOptions.inputLanguage || 'es';
       const task = languageOptions.task || 'transcribe';
+      const timestamps = languageOptions.timestamps || false;
+
+      const options = {
+        task: task,
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        return_timestamps: timestamps
+      };
+
+      // For auto-detect, omit language so Whisper detects it
+      if (inputLang !== 'auto') {
+        options.language = this.getWhisperLanguageName(inputLang);
+      }
 
       const result = await new Promise((resolve, reject) => {
         this.transcribeResolve = resolve;
@@ -296,16 +318,7 @@ class TranscriptionService {
 
         this.worker.postMessage({
           type: 'transcribe',
-          data: {
-            audioData: audioData,
-            options: {
-              language: this.getWhisperLanguageName(inputLang),
-              task: task,
-              chunk_length_s: 30,
-              stride_length_s: 5,
-              return_timestamps: false
-            }
-          }
+          data: { audioData, options }
         });
       });
 
@@ -315,6 +328,7 @@ class TranscriptionService {
       const resultData = {
         success: true,
         transcription: result.text.trim(),
+        chunks: timestamps ? result.chunks : null,
         method: 'webgpu',
         task: task
       };

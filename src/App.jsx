@@ -14,7 +14,6 @@ function encodeWAV(audioBuffer) {
     channels.push(audioBuffer.getChannelData(i));
   }
 
-  // Interleave channels
   const length = channels[0].length;
   const interleaved = new Float32Array(length * numChannels);
   for (let i = 0; i < length; i++) {
@@ -56,6 +55,59 @@ function encodeWAV(audioBuffer) {
   return buffer;
 }
 
+// Draw waveform on canvas from audio data
+function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
+  if (!canvas || !audioData) return;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+
+  ctx.fillStyle = bgColor || 'transparent';
+  ctx.fillRect(0, 0, width, height);
+
+  const step = Math.ceil(audioData.length / width);
+  const amp = height / 2;
+
+  ctx.fillStyle = accentColor || '#06b6d4';
+  ctx.globalAlpha = 0.8;
+
+  for (let i = 0; i < width; i++) {
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = 0; j < step; j++) {
+      const datum = audioData[i * step + j];
+      if (datum === undefined) break;
+      if (datum < min) min = datum;
+      if (datum > max) max = datum;
+    }
+    const yLow = (1 + min) * amp;
+    const yHigh = (1 + max) * amp;
+    ctx.fillRect(i, yLow, 1, Math.max(1, yHigh - yLow));
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+// Decode audio blob to AudioBuffer and extract mono channel
+async function decodeAudioBlob(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioCtx = new AudioContext();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  await audioCtx.close();
+  return audioBuffer;
+}
+
+// Get theme from preferences
+function getInitialTheme() {
+  const saved = localStorage.getItem('themePreference');
+  if (saved === 'light' || saved === 'dark') return saved;
+  // 'system' or default: use prefers-color-scheme
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+    return 'light';
+  }
+  return 'dark';
+}
+
 function App() {
   // Navigation
   const [activeTab, setActiveTab] = useState('transcribe');
@@ -68,13 +120,18 @@ function App() {
 
   // Transcription states
   const [transcription, setTranscription] = useState('');
+  const [transcriptionSegments, setTranscriptionSegments] = useState(null);
+  const [transcriptionChunks, setTranscriptionChunks] = useState(null);
+  const [detectedLanguage, setDetectedLanguage] = useState(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [modelLoadProgress, setModelLoadProgress] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [enableTimestamps, setEnableTimestamps] = useState(false);
 
   // Audio playback
   const [recordedAudioUrl, setRecordedAudioUrl] = useState(null);
   const [recordedAudioBlob, setRecordedAudioBlob] = useState(null);
+  const [audioBufferData, setAudioBufferData] = useState(null);
 
   // Mode & model
   const [mode, setMode] = useState('webgpu');
@@ -86,12 +143,19 @@ function App() {
 
   // Language & task
   const [inputLanguage, setInputLanguage] = useState('es');
-  const [task, setTask] = useState('transcribe'); // 'transcribe' or 'translate'
+  const [task, setTask] = useState('transcribe');
   const [isLanguageSelectorOpen, setIsLanguageSelectorOpen] = useState(false);
 
   // Upload
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
+
+  // Trimmer
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(1);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [isTrimming, setIsTrimming] = useState(false);
+  const [trimDragging, setTrimDragging] = useState(null);
 
   // History
   const [history, setHistory] = useState([]);
@@ -102,6 +166,12 @@ function App() {
   const [webGPUSupport, setWebGPUSupport] = useState({ supported: null, reason: '' });
   const [isLoadingCache, setIsLoadingCache] = useState(false);
 
+  // Theme
+  const [themePreference, setThemePreference] = useState(
+    () => localStorage.getItem('themePreference') || 'system'
+  );
+  const [activeTheme, setActiveTheme] = useState(getInitialTheme);
+
   // Recorder tool states
   const [toolIsRecording, setToolIsRecording] = useState(false);
   const [toolIsPaused, setToolIsPaused] = useState(false);
@@ -111,6 +181,7 @@ function App() {
   const [toolAudioBlob, setToolAudioBlob] = useState(null);
   const [toolSpeed, setToolSpeed] = useState(1.0);
   const [isProcessingDownload, setIsProcessingDownload] = useState(false);
+  const [toolAudioBufferData, setToolAudioBufferData] = useState(null);
 
   // Refs
   const mediaRecorderRef = useRef(null);
@@ -121,6 +192,8 @@ function App() {
   const timerIntervalRef = useRef(null);
   const fileInputRef = useRef(null);
   const audioPlayerRef = useRef(null);
+  const waveformCanvasRef = useRef(null);
+  const trimmerCanvasRef = useRef(null);
 
   // Tool recorder refs
   const toolMediaRecorderRef = useRef(null);
@@ -130,6 +203,45 @@ function App() {
   const toolAnalyserRef = useRef(null);
   const toolTimerIntervalRef = useRef(null);
   const toolAudioPlayerRef = useRef(null);
+  const toolWaveformCanvasRef = useRef(null);
+
+  // ===== THEME =====
+  useEffect(() => {
+    const resolveTheme = () => {
+      if (themePreference === 'light' || themePreference === 'dark') {
+        return themePreference;
+      }
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+      return 'dark';
+    };
+
+    const resolved = resolveTheme();
+    setActiveTheme(resolved);
+    document.documentElement.setAttribute('data-theme', resolved);
+    localStorage.setItem('themePreference', themePreference);
+
+    // Listen for system theme changes when preference is 'system'
+    if (themePreference === 'system') {
+      const mql = window.matchMedia('(prefers-color-scheme: light)');
+      const handler = (e) => {
+        const newTheme = e.matches ? 'light' : 'dark';
+        setActiveTheme(newTheme);
+        document.documentElement.setAttribute('data-theme', newTheme);
+      };
+      mql.addEventListener('change', handler);
+      return () => mql.removeEventListener('change', handler);
+    }
+  }, [themePreference]);
+
+  const cycleTheme = () => {
+    if (activeTheme === 'dark') {
+      setThemePreference('light');
+    } else {
+      setThemePreference('dark');
+    }
+  };
 
   // Load history
   useEffect(() => {
@@ -166,9 +278,6 @@ function App() {
       if (toolStreamRef.current) toolStreamRef.current.getTracks().forEach(t => t.stop());
       if (toolAnimationFrameRef.current) cancelAnimationFrame(toolAnimationFrameRef.current);
       if (toolTimerIntervalRef.current) clearInterval(toolTimerIntervalRef.current);
-      // Revoke object URLs
-      if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
-      if (toolAudioUrl) URL.revokeObjectURL(toolAudioUrl);
     };
   }, []);
 
@@ -176,6 +285,39 @@ function App() {
   useEffect(() => {
     if (activeTab === 'settings') loadCachedModels();
   }, [activeTab]);
+
+  // Draw waveform when audio changes (transcribe tab)
+  useEffect(() => {
+    if (audioBufferData && waveformCanvasRef.current) {
+      const canvas = waveformCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+    }
+  }, [audioBufferData, activeTheme]);
+
+  // Draw trimmer waveform
+  useEffect(() => {
+    if (audioBufferData && trimmerCanvasRef.current) {
+      const canvas = trimmerCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+    }
+  }, [audioBufferData, activeTheme, isTrimming]);
+
+  // Draw tool waveform
+  useEffect(() => {
+    if (toolAudioBufferData && toolWaveformCanvasRef.current) {
+      const canvas = toolWaveformCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent');
+    }
+  }, [toolAudioBufferData, activeTheme]);
 
   const loadCachedModels = async () => {
     setIsLoadingCache(true);
@@ -194,12 +336,35 @@ function App() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  const formatTimePrecise = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
+  };
+
   const formatDate = (iso) => {
     return new Date(iso).toLocaleDateString('es-ES', {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit'
     });
   };
+
+  // Load audio buffer data for waveform visualization
+  const loadAudioBufferForWaveform = useCallback(async (blob, setBufferData, setDuration) => {
+    try {
+      const audioBuffer = await decodeAudioBlob(blob);
+      const channelData = audioBuffer.getChannelData(0);
+      setBufferData(channelData);
+      if (setDuration) {
+        setDuration(audioBuffer.duration);
+        setTrimStart(0);
+        setTrimEnd(audioBuffer.duration);
+      }
+    } catch (e) {
+      console.error('Error decoding audio for waveform:', e);
+    }
+  }, []);
 
   // ===== TRANSCRIBE TAB RECORDING =====
   const startRecording = async () => {
@@ -233,11 +398,11 @@ function App() {
 
       mediaRecorder.onstop = async () => {
         const blob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        // Create playback URL
         if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
         const url = URL.createObjectURL(blob);
         setRecordedAudioUrl(url);
         setRecordedAudioBlob(blob);
+        loadAudioBufferForWaveform(blob, setAudioBufferData, setAudioDuration);
         await transcribeAudio(blob, 'recording');
       };
 
@@ -246,8 +411,13 @@ function App() {
       setIsPaused(false);
       setRecordingTime(0);
       setTranscription('');
+      setTranscriptionSegments(null);
+      setTranscriptionChunks(null);
+      setDetectedLanguage(null);
       setRecordedAudioUrl(null);
       setRecordedAudioBlob(null);
+      setAudioBufferData(null);
+      setIsTrimming(false);
 
       timerIntervalRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
@@ -334,6 +504,7 @@ function App() {
         const url = URL.createObjectURL(blob);
         setToolAudioUrl(url);
         setToolAudioBlob(blob);
+        loadAudioBufferForWaveform(blob, setToolAudioBufferData, null);
       };
 
       mediaRecorder.start();
@@ -343,6 +514,7 @@ function App() {
       setToolAudioUrl(null);
       setToolAudioBlob(null);
       setToolSpeed(1.0);
+      setToolAudioBufferData(null);
 
       toolTimerIntervalRef.current = setInterval(() => {
         setToolRecordingTime(prev => prev + 1);
@@ -436,10 +608,122 @@ function App() {
     }
   }, [toolAudioBlob, toolSpeed]);
 
+  // ===== AUDIO TRIMMER =====
+  const trimAndUseAudio = useCallback(async (action) => {
+    if (!recordedAudioBlob || !audioDuration) return;
+
+    try {
+      const arrayBuffer = await recordedAudioBlob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+      const startSample = Math.floor(trimStart * decoded.sampleRate);
+      const endSample = Math.floor(trimEnd * decoded.sampleRate);
+      const trimLength = endSample - startSample;
+
+      if (trimLength <= 0) return;
+
+      const trimmedBuffer = audioCtx.createBuffer(
+        decoded.numberOfChannels,
+        trimLength,
+        decoded.sampleRate
+      );
+
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const sourceData = decoded.getChannelData(ch);
+        const targetData = trimmedBuffer.getChannelData(ch);
+        for (let i = 0; i < trimLength; i++) {
+          targetData[i] = sourceData[startSample + i];
+        }
+      }
+
+      const wavData = encodeWAV(trimmedBuffer);
+      const trimmedBlob = new Blob([wavData], { type: 'audio/wav' });
+
+      if (action === 'transcribe') {
+        if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+        const url = URL.createObjectURL(trimmedBlob);
+        setRecordedAudioUrl(url);
+        setRecordedAudioBlob(trimmedBlob);
+        loadAudioBufferForWaveform(trimmedBlob, setAudioBufferData, setAudioDuration);
+        setIsTrimming(false);
+        await transcribeAudio(trimmedBlob, 'trimmed recording');
+      } else if (action === 'download') {
+        const url = URL.createObjectURL(trimmedBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'audio_recortado.wav';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      await audioCtx.close();
+    } catch (error) {
+      console.error('Error trimming audio:', error);
+      alert('Error al recortar el audio.');
+    }
+  }, [recordedAudioBlob, audioDuration, trimStart, trimEnd, recordedAudioUrl, loadAudioBufferForWaveform]);
+
+  const handleTrimmerMouseDown = useCallback((e, handle) => {
+    e.preventDefault();
+    setTrimDragging(handle);
+  }, []);
+
+  const handleTrimmerMouseMove = useCallback((e) => {
+    if (!trimDragging || !trimmerCanvasRef.current || !audioDuration) return;
+    const rect = trimmerCanvasRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const time = x * audioDuration;
+
+    if (trimDragging === 'start') {
+      setTrimStart(Math.min(time, trimEnd - 0.1));
+    } else if (trimDragging === 'end') {
+      setTrimEnd(Math.max(time, trimStart + 0.1));
+    }
+  }, [trimDragging, audioDuration, trimStart, trimEnd]);
+
+  const handleTrimmerMouseUp = useCallback(() => {
+    setTrimDragging(null);
+  }, []);
+
+  useEffect(() => {
+    if (trimDragging) {
+      window.addEventListener('mousemove', handleTrimmerMouseMove);
+      window.addEventListener('mouseup', handleTrimmerMouseUp);
+      window.addEventListener('touchmove', handleTrimmerTouchMove);
+      window.addEventListener('touchend', handleTrimmerMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleTrimmerMouseMove);
+        window.removeEventListener('mouseup', handleTrimmerMouseUp);
+        window.removeEventListener('touchmove', handleTrimmerTouchMove);
+        window.removeEventListener('touchend', handleTrimmerMouseUp);
+      };
+    }
+  }, [trimDragging, handleTrimmerMouseMove, handleTrimmerMouseUp]);
+
+  const handleTrimmerTouchMove = useCallback((e) => {
+    if (!trimDragging || !trimmerCanvasRef.current || !audioDuration) return;
+    const touch = e.touches[0];
+    const rect = trimmerCanvasRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+    const time = x * audioDuration;
+
+    if (trimDragging === 'start') {
+      setTrimStart(Math.min(time, trimEnd - 0.1));
+    } else if (trimDragging === 'end') {
+      setTrimEnd(Math.max(time, trimStart + 0.1));
+    }
+  }, [trimDragging, audioDuration, trimStart, trimEnd]);
+
   // ===== TRANSCRIPTION =====
   const transcribeAudio = async (audioBlob, source = 'recording') => {
     setIsTranscribing(true);
     setTranscription('');
+    setTranscriptionSegments(null);
+    setTranscriptionChunks(null);
+    setDetectedLanguage(null);
 
     try {
       const result = await transcriptionService.transcribe(
@@ -455,11 +739,15 @@ function App() {
             setModelLoadProgress(Math.round(Math.max(0, Math.min(100, pct))));
           }
         },
-        { inputLanguage, task }
+        { inputLanguage, task, timestamps: enableTimestamps }
       );
 
       if (result.success) {
         setTranscription(result.transcription);
+        if (result.segments) setTranscriptionSegments(result.segments);
+        if (result.chunks) setTranscriptionChunks(result.chunks);
+        if (result.detectedLanguage) setDetectedLanguage(result.detectedLanguage);
+
         const entry = {
           id: Date.now(),
           timestamp: new Date().toISOString(),
@@ -467,7 +755,8 @@ function App() {
           inputLanguage,
           task,
           transcription: result.transcription,
-          method: result.method
+          method: result.method,
+          detectedLanguage: result.detectedLanguage || null
         };
         setHistory(prev => [entry, ...prev].slice(0, 50));
       } else {
@@ -511,11 +800,12 @@ function App() {
       return;
     }
     setUploadedFile(file);
-    // Create audio URL for playback
     if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
     const url = URL.createObjectURL(file);
     setRecordedAudioUrl(url);
     setRecordedAudioBlob(file);
+    loadAudioBufferForWaveform(file, setAudioBufferData, setAudioDuration);
+    setIsTrimming(false);
   };
 
   const transcribeUploadedFile = async () => {
@@ -552,6 +842,14 @@ function App() {
   const languages = transcriptionService.getSupportedLanguages();
   const currentLang = languages.find(l => l.code === inputLanguage);
 
+  // Format timestamp for display (seconds -> MM:SS.s)
+  const formatTimestamp = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
+  };
+
   // ===== RENDER FUNCTIONS =====
 
   const renderWaveform = (level, active, barCount = 20) => (
@@ -570,6 +868,40 @@ function App() {
       ))}
     </div>
   );
+
+  const renderTimestampResult = () => {
+    // Backend segments
+    if (transcriptionSegments && transcriptionSegments.length > 0) {
+      return (
+        <div className="timestamp-segments">
+          {transcriptionSegments.map((seg, i) => (
+            <div key={i} className="timestamp-segment">
+              <span className="ts-time">{formatTimestamp(seg.start)} - {formatTimestamp(seg.end)}</span>
+              <span className="ts-text">{seg.text}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // WebGPU chunks
+    if (transcriptionChunks && transcriptionChunks.length > 0) {
+      return (
+        <div className="timestamp-segments">
+          {transcriptionChunks.map((chunk, i) => (
+            <div key={i} className="timestamp-segment">
+              <span className="ts-time">
+                {chunk.timestamp && chunk.timestamp[0] != null
+                  ? `${formatTimestamp(chunk.timestamp[0])} - ${chunk.timestamp[1] != null ? formatTimestamp(chunk.timestamp[1]) : '...'}`
+                  : ''}
+              </span>
+              <span className="ts-text">{chunk.text}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
 
   const renderTranscribeTab = () => (
     <div className="tab-content">
@@ -622,6 +954,23 @@ function App() {
             </button>
           )}
         </div>
+
+        {/* Timestamps toggle */}
+        <div className="toggle-row">
+          <div className="toggle-info">
+            <span className="toggle-label">Timestamps</span>
+            <span className="toggle-desc">Marcas de tiempo en la transcripcion</span>
+          </div>
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enableTimestamps}
+              onChange={(e) => setEnableTimestamps(e.target.checked)}
+              disabled={isRecording || isTranscribing}
+            />
+            <span className="toggle-track"></span>
+          </label>
+        </div>
       </div>
 
       {/* Upload zone */}
@@ -650,7 +999,7 @@ function App() {
               <button className="btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); transcribeUploadedFile(); }} disabled={isTranscribing}>
                 Transcribir
               </button>
-              <button className="btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setRecordedAudioUrl(null); }}>
+              <button className="btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setRecordedAudioUrl(null); setAudioBufferData(null); }}>
                 Quitar
               </button>
             </div>
@@ -708,11 +1057,90 @@ function App() {
         </div>
       </div>
 
-      {/* Audio player for recorded/uploaded audio */}
+      {/* Waveform visualization + Audio player */}
       {recordedAudioUrl && !isRecording && (
         <div className="audio-player-card">
           <h3>Audio</h3>
+          {audioBufferData && (
+            <div className="waveform-canvas-container">
+              <canvas ref={waveformCanvasRef} className="waveform-canvas" />
+              <span className="waveform-canvas-label">Waveform</span>
+            </div>
+          )}
           <audio ref={audioPlayerRef} controls src={recordedAudioUrl} className="audio-player" />
+          {audioBufferData && audioDuration > 0 && !isTrimming && (
+            <button
+              className="btn-sm btn-ghost full-w"
+              style={{ marginTop: '0.5rem' }}
+              onClick={() => {
+                setTrimStart(0);
+                setTrimEnd(audioDuration);
+                setIsTrimming(true);
+              }}
+              disabled={isTranscribing}
+            >
+              Recortar audio
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Audio Trimmer */}
+      {isTrimming && audioBufferData && (
+        <div className="trimmer-card">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
+            </svg>
+            Recortar
+          </h3>
+          <div className="trimmer-waveform-wrap">
+            <canvas ref={trimmerCanvasRef} className="trimmer-canvas" />
+            <div
+              className="trimmer-overlay"
+              style={{
+                left: `${(trimStart / audioDuration) * 100}%`,
+                width: `${((trimEnd - trimStart) / audioDuration) * 100}%`
+              }}
+            />
+            <div
+              className="trimmer-handle start"
+              style={{ left: `${(trimStart / audioDuration) * 100}%` }}
+              onMouseDown={(e) => handleTrimmerMouseDown(e, 'start')}
+              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('start'); }}
+            />
+            <div
+              className="trimmer-handle end"
+              style={{ left: `${(trimEnd / audioDuration) * 100}%` }}
+              onMouseDown={(e) => handleTrimmerMouseDown(e, 'end')}
+              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('end'); }}
+            />
+          </div>
+          <div className="trimmer-times">
+            <div className="trimmer-time">
+              <span className="trimmer-time-label">Inicio</span>
+              <span className="trimmer-time-value">{formatTimePrecise(trimStart)}</span>
+            </div>
+            <div className="trimmer-duration">
+              Duracion: {formatTimePrecise(trimEnd - trimStart)}
+            </div>
+            <div className="trimmer-time">
+              <span className="trimmer-time-label">Fin</span>
+              <span className="trimmer-time-value">{formatTimePrecise(trimEnd)}</span>
+            </div>
+          </div>
+          <div className="trimmer-actions">
+            <button className="btn-sm btn-primary" onClick={() => trimAndUseAudio('transcribe')} disabled={isTranscribing}>
+              Transcribir recorte
+            </button>
+            <button className="btn-sm btn-ghost" onClick={() => trimAndUseAudio('download')}>
+              Descargar recorte
+            </button>
+            <button className="btn-sm btn-ghost" onClick={() => setIsTrimming(false)}>
+              Cancelar
+            </button>
+          </div>
         </div>
       )}
 
@@ -740,9 +1168,23 @@ function App() {
         <div className="result-card">
           <div className="result-header">
             <h3>{task === 'translate' ? 'Traduccion (EN)' : 'Transcripcion'}</h3>
-            <span className="result-badge">{mode === 'backend' ? 'Backend' : 'WebGPU'}</span>
+            <div className="result-badges">
+              <span className="result-badge">{mode === 'backend' ? 'Backend' : 'WebGPU'}</span>
+              {detectedLanguage && (
+                <span className="result-badge lang">
+                  {detectedLanguage.toUpperCase()}
+                </span>
+              )}
+            </div>
           </div>
-          <div className="result-text">{transcription}</div>
+
+          {/* Show timestamps or plain text */}
+          {enableTimestamps && (transcriptionSegments || transcriptionChunks) ? (
+            renderTimestampResult()
+          ) : (
+            <div className="result-text">{transcription}</div>
+          )}
+
           <div className="result-actions">
             <button
               className={`btn-sm btn-primary ${copied ? 'copied' : ''}`}
@@ -810,6 +1252,12 @@ function App() {
       {toolAudioUrl && !toolIsRecording && (
         <div className="audio-tool-card">
           <h3>Reproducir</h3>
+          {toolAudioBufferData && (
+            <div className="waveform-canvas-container">
+              <canvas ref={toolWaveformCanvasRef} className="waveform-canvas" />
+              <span className="waveform-canvas-label">Waveform</span>
+            </div>
+          )}
           <audio
             ref={toolAudioPlayerRef}
             controls
@@ -914,8 +1362,11 @@ function App() {
             <div key={entry.id} className="history-card">
               <div className="history-meta">
                 <span className="history-date">{formatDate(entry.timestamp)}</span>
-                <span className="history-badge">{entry.task === 'translate' ? 'Traduccion' : entry.inputLanguage?.toUpperCase()}</span>
+                <span className="history-badge">{entry.task === 'translate' ? 'Traduccion' : entry.inputLanguage === 'auto' ? 'Auto' : entry.inputLanguage?.toUpperCase()}</span>
                 <span className="history-badge secondary">{entry.method}</span>
+                {entry.detectedLanguage && (
+                  <span className="history-badge secondary">{entry.detectedLanguage}</span>
+                )}
                 <button className="history-del" onClick={() => deleteHistoryEntry(entry.id)}>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
@@ -945,6 +1396,26 @@ function App() {
       <div className="section-intro">
         <h2>Ajustes</h2>
         <p>Configuracion y modelos</p>
+      </div>
+
+      {/* Theme */}
+      <div className="settings-card">
+        <h3>Tema</h3>
+        <div className="theme-options">
+          {[
+            { value: 'system', label: 'Sistema' },
+            { value: 'light', label: 'Claro' },
+            { value: 'dark', label: 'Oscuro' }
+          ].map(opt => (
+            <button
+              key={opt.value}
+              className={`theme-opt ${themePreference === opt.value ? 'sel' : ''}`}
+              onClick={() => setThemePreference(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="settings-card">
@@ -1018,7 +1489,7 @@ function App() {
         <div className="about-block">
           <p><strong>Transcript X</strong></p>
           <p>Transcripcion de voz offline con IA</p>
-          <p className="hint">Version 2.0</p>
+          <p className="hint">Version 2.1</p>
         </div>
       </div>
     </div>
@@ -1041,6 +1512,20 @@ function App() {
           </svg>
           <span>Transcript X</span>
         </div>
+        <button className="theme-toggle" onClick={cycleTheme} title={activeTheme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}>
+          {activeTheme === 'dark' ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+            </svg>
+          )}
+        </button>
       </header>
 
       {/* Main content */}
@@ -1146,20 +1631,20 @@ function App() {
                 {languages.map(lang => (
                   <button
                     key={lang.code}
-                    className={`lang-opt ${inputLanguage === lang.code ? 'sel' : ''}`}
+                    className={`lang-opt ${inputLanguage === lang.code ? 'sel' : ''} ${lang.code === 'auto' ? 'auto-detect' : ''}`}
                     onClick={() => {
                       setInputLanguage(lang.code);
                       if (lang.code === 'en') setTask('transcribe');
                       setIsLanguageSelectorOpen(false);
                     }}
                   >
-                    <span className="lang-code">{lang.code.toUpperCase()}</span>
+                    <span className="lang-code">{lang.code === 'auto' ? 'AUTO' : lang.code.toUpperCase()}</span>
                     <span className="lang-name">{lang.name}</span>
                   </button>
                 ))}
               </div>
               <p className="modal-hint">
-                Whisper soporta 99 idiomas. Solo se traducira al ingles (tarea &quot;translate&quot; de Whisper). Todo funciona offline.
+                &quot;Auto Detect&quot; permite a Whisper detectar el idioma automaticamente. Solo se traducira al ingles (tarea &quot;translate&quot; de Whisper). Todo funciona offline.
               </p>
             </div>
           </div>
