@@ -88,6 +88,313 @@ function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
   ctx.globalAlpha = 1;
 }
 
+// Color utility: hex to RGB
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 6, g: 182, b: 212 };
+}
+
+// Color utility: hex to HSL
+function hexToHsl(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const r1 = r / 255, g1 = g / 255, b1 = b / 255;
+  const max = Math.max(r1, g1, b1), min = Math.min(r1, g1, b1);
+  let h, s, l = (max + min) / 2;
+
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r1: h = ((g1 - b1) / d + (g1 < b1 ? 6 : 0)) / 6; break;
+      case g1: h = ((b1 - r1) / d + 2) / 6; break;
+      case b1: h = ((r1 - g1) / d + 4) / 6; break;
+    }
+  }
+  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+// Apply accent color to CSS custom properties
+function applyAccentColor(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const { h, s, l } = hexToHsl(hex);
+  const root = document.documentElement;
+
+  root.style.setProperty('--accent', hex);
+  root.style.setProperty('--accent-2', `hsl(${h}, ${Math.min(s + 10, 100)}%, ${Math.min(l + 10, 90)}%)`);
+  root.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.1)`);
+  root.style.setProperty('--accent-border', `rgba(${r}, ${g}, ${b}, 0.2)`);
+  root.style.setProperty('--accent-glow', `rgba(${r}, ${g}, ${b}, 0.3)`);
+  root.style.setProperty('--waveform-color', hex);
+  root.style.setProperty('--waveform-bg', `rgba(${r}, ${g}, ${b}, 0.15)`);
+}
+
+// Clear custom accent (revert to theme defaults)
+function clearAccentColor() {
+  const root = document.documentElement;
+  const props = ['--accent', '--accent-2', '--accent-bg', '--accent-border', '--accent-glow', '--waveform-color', '--waveform-bg'];
+  props.forEach(p => root.style.removeProperty(p));
+}
+
+// Preset accent colors
+const ACCENT_PRESETS = [
+  { name: 'Cyan', hex: '#06b6d4' },
+  { name: 'Blue', hex: '#3b82f6' },
+  { name: 'Violet', hex: '#8b5cf6' },
+  { name: 'Pink', hex: '#ec4899' },
+  { name: 'Rose', hex: '#f43f5e' },
+  { name: 'Orange', hex: '#f97316' },
+  { name: 'Amber', hex: '#f59e0b' },
+  { name: 'Lime', hex: '#84cc16' },
+  { name: 'Green', hex: '#10b981' },
+  { name: 'Teal', hex: '#14b8a6' },
+  { name: 'Indigo', hex: '#6366f1' },
+  { name: 'Red', hex: '#ef4444' },
+];
+
+// Spectacular Siri Orb Visualizer
+function drawSiriOrb(canvas, audioLevel, accentHex, time, freqData, smoothedRef, particlesRef, dt) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const size = canvas.width;
+  const cx = size / 2;
+  const cy = size / 2;
+  const { r, g, b } = hexToRgb(accentHex);
+  const { h, s } = hexToHsl(accentHex);
+
+  ctx.clearRect(0, 0, size, size);
+
+  const level = Math.min(audioLevel / 150, 1);
+  const baseR = size * 0.25;
+
+  // Smooth frequency data for organic movement
+  const smoothed = smoothedRef.current;
+  const bands = 64;
+  if (freqData && freqData.length > 0) {
+    const step = Math.floor(freqData.length / bands);
+    for (let i = 0; i < bands; i++) {
+      let sum = 0;
+      for (let j = 0; j < step; j++) sum += freqData[i * step + j] || 0;
+      const target = (sum / step) / 255;
+      smoothed[i] += (target - smoothed[i]) * 0.15;
+    }
+  } else {
+    for (let i = 0; i < bands; i++) {
+      smoothed[i] *= 0.92;
+    }
+  }
+
+  // === AMBIENT BACKGROUND NEBULA ===
+  for (let i = 0; i < 3; i++) {
+    const nebulaR = baseR * (1.8 + i * 0.4) + level * 30;
+    const angle = time * (0.3 + i * 0.15) + i * 2.1;
+    const ox = Math.cos(angle) * baseR * 0.15;
+    const oy = Math.sin(angle) * baseR * 0.12;
+    const grad = ctx.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, nebulaR);
+    const hueShift = (h + i * 40 + time * 15) % 360;
+    grad.addColorStop(0, `hsla(${hueShift}, ${s}%, 55%, ${0.04 + level * 0.06})`);
+    grad.addColorStop(0.5, `hsla(${hueShift}, ${s}%, 45%, ${0.02 + level * 0.03})`);
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx + ox, cy + oy, nebulaR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // === ORGANIC BLOB LAYERS (Bezier-based) ===
+  const numLayers = 5;
+  const pts = 8; // control points per blob
+
+  for (let layer = 0; layer < numLayers; layer++) {
+    const layerT = layer / numLayers;
+    const hueShift = (h + layer * 30 + Math.sin(time * 0.5 + layer) * 20) % 360;
+    const lightness = 50 + level * 15;
+    const layerRadius = baseR * (0.85 + layerT * 0.35) + level * baseR * 0.2;
+    const rotSpeed = (layer % 2 === 0 ? 1 : -1) * (0.4 + layerT * 0.3);
+    const rotation = time * rotSpeed + layer * 1.256;
+
+    // Compute control points with frequency-based distortion
+    const controlPoints = [];
+    for (let i = 0; i < pts; i++) {
+      const angle = (i / pts) * Math.PI * 2 + rotation;
+      const freqIdx = Math.floor((i / pts) * bands) % bands;
+      const freqVal = smoothed[freqIdx] || 0;
+      const distort = freqVal * baseR * 0.35 + level * baseR * 0.15;
+
+      const wave =
+        Math.sin(angle * 2 + time * 1.5 + layer * 0.8) * (8 + level * 15) +
+        Math.sin(angle * 3 - time * 2.2 + layer * 1.3) * (5 + level * 10) +
+        Math.sin(angle * 5 + time * 0.8 + layer * 2.0) * (3 + level * 6);
+
+      const r2 = layerRadius + distort + wave;
+      controlPoints.push({
+        x: cx + Math.cos(angle) * r2,
+        y: cy + Math.sin(angle) * r2
+      });
+    }
+
+    // Draw smooth closed bezier curve through points
+    const lineW = 1.5 + (numLayers - layer) * 0.5 + level * 1.5;
+    const alpha = (0.15 + level * 0.45) * (1 - layerT * 0.5);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = `hsla(${hueShift}, ${Math.min(s + 15, 100)}%, ${lightness}%, ${alpha})`;
+    ctx.lineWidth = lineW;
+    ctx.shadowColor = `hsla(${hueShift}, ${s}%, ${lightness}%, ${alpha * 0.8})`;
+    ctx.shadowBlur = 12 + level * 25;
+
+    for (let i = 0; i < pts; i++) {
+      const curr = controlPoints[i];
+      const next = controlPoints[(i + 1) % pts];
+      const prev = controlPoints[(i - 1 + pts) % pts];
+      const next2 = controlPoints[(i + 2) % pts];
+
+      if (i === 0) ctx.moveTo(curr.x, curr.y);
+
+      // Catmull-Rom to Bezier control points
+      const cp1x = curr.x + (next.x - prev.x) / 6;
+      const cp1y = curr.y + (next.y - prev.y) / 6;
+      const cp2x = next.x - (next2.x - curr.x) / 6;
+      const cp2y = next.y - (next2.y - curr.y) / 6;
+
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, next.x, next.y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    // Fill innermost layers with gradient
+    if (layer < 2) {
+      const fillAlpha = (0.03 + level * 0.05) * (1 - layerT);
+      ctx.fillStyle = `hsla(${hueShift}, ${s}%, ${lightness}%, ${fillAlpha})`;
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // === INNER CORE GLOW ===
+  const coreR = baseR * (0.5 + level * 0.2);
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  const coreHue = (h + Math.sin(time) * 15) % 360;
+  coreGrad.addColorStop(0, `hsla(${coreHue}, ${s}%, 65%, ${0.12 + level * 0.2})`);
+  coreGrad.addColorStop(0.4, `hsla(${coreHue}, ${s}%, 55%, ${0.06 + level * 0.1})`);
+  coreGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = coreGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bright center dot
+  const dotR = 3 + level * 5;
+  const dotGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, dotR);
+  dotGrad.addColorStop(0, `rgba(255, 255, 255, ${0.3 + level * 0.5})`);
+  dotGrad.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${0.2 + level * 0.3})`);
+  dotGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = dotGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // === PARTICLES ===
+  const particles = particlesRef.current;
+
+  // Spawn particles when audio is active
+  if (level > 0.05 && particles.length < 60) {
+    const spawnCount = Math.floor(level * 4);
+    for (let i = 0; i < spawnCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 20 + Math.random() * 60 * level;
+      const life = 0.8 + Math.random() * 1.5;
+      const pSize = 1 + Math.random() * 3 * level;
+      const pHue = (h + Math.random() * 60 - 30) % 360;
+      particles.push({
+        x: cx + Math.cos(angle) * baseR * (0.8 + Math.random() * 0.3),
+        y: cy + Math.sin(angle) * baseR * (0.8 + Math.random() * 0.3),
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life, maxLife: life, size: pSize, hue: pHue
+      });
+    }
+  }
+
+  // Update and draw particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= 0.97;
+    p.vy *= 0.97;
+    p.life -= dt;
+
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    const lifeRatio = p.life / p.maxLife;
+    const pAlpha = lifeRatio * (0.4 + level * 0.5);
+    const pR = p.size * (0.5 + lifeRatio * 0.5);
+
+    ctx.save();
+    ctx.globalAlpha = pAlpha;
+    ctx.shadowColor = `hsla(${p.hue}, ${s}%, 60%, ${pAlpha})`;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = `hsla(${p.hue}, ${Math.min(s + 20, 100)}%, 70%, 1)`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, pR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // === ROTATING LIGHT STREAK ===
+  const streakAngle = time * 1.2;
+  const streakLen = baseR * (0.7 + level * 0.5);
+  const x1 = cx + Math.cos(streakAngle) * baseR * 0.6;
+  const y1 = cy + Math.sin(streakAngle) * baseR * 0.6;
+  const x2 = cx + Math.cos(streakAngle) * (baseR * 0.6 + streakLen);
+  const y2 = cy + Math.sin(streakAngle) * (baseR * 0.6 + streakLen);
+
+  const streakGrad = ctx.createLinearGradient(x1, y1, x2, y2);
+  streakGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.06 + level * 0.12})`);
+  streakGrad.addColorStop(0.5, `rgba(255, 255, 255, ${0.03 + level * 0.06})`);
+  streakGrad.addColorStop(1, 'transparent');
+  ctx.save();
+  ctx.lineWidth = 2 + level * 3;
+  ctx.strokeStyle = streakGrad;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.3 * level})`;
+  ctx.shadowBlur = 15;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Mirror streak
+  const mx1 = cx + Math.cos(streakAngle + Math.PI) * baseR * 0.6;
+  const my1 = cy + Math.sin(streakAngle + Math.PI) * baseR * 0.6;
+  const mx2 = cx + Math.cos(streakAngle + Math.PI) * (baseR * 0.6 + streakLen * 0.7);
+  const my2 = cy + Math.sin(streakAngle + Math.PI) * (baseR * 0.6 + streakLen * 0.7);
+
+  const mGrad = ctx.createLinearGradient(mx1, my1, mx2, my2);
+  mGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.04 + level * 0.08})`);
+  mGrad.addColorStop(1, 'transparent');
+  ctx.save();
+  ctx.lineWidth = 1.5 + level * 2;
+  ctx.strokeStyle = mGrad;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(mx1, my1);
+  ctx.lineTo(mx2, my2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 // Decode audio blob to AudioBuffer and extract mono channel
 async function decodeAudioBlob(blob) {
   const arrayBuffer = await blob.arrayBuffer();
@@ -172,6 +479,16 @@ function App() {
   );
   const [activeTheme, setActiveTheme] = useState(getInitialTheme);
 
+  // Accent color (independent of theme)
+  const [accentColor, setAccentColor] = useState(
+    () => localStorage.getItem('accentColor') || ''
+  );
+
+  // Visualizer mode ('bars' or 'siri')
+  const [vizMode, setVizMode] = useState(
+    () => localStorage.getItem('vizMode') || 'bars'
+  );
+
   // Recorder tool states
   const [toolIsRecording, setToolIsRecording] = useState(false);
   const [toolIsPaused, setToolIsPaused] = useState(false);
@@ -194,6 +511,20 @@ function App() {
   const audioPlayerRef = useRef(null);
   const waveformCanvasRef = useRef(null);
   const trimmerCanvasRef = useRef(null);
+
+  // Siri visualizer refs
+  const siriCanvasRef = useRef(null);
+  const siriAnimRef = useRef(null);
+  const siriTimeRef = useRef(0);
+  const toolSiriCanvasRef = useRef(null);
+  const toolSiriAnimRef = useRef(null);
+  const toolSiriTimeRef = useRef(0);
+  const freqDataRef = useRef(new Uint8Array(128));
+  const toolFreqDataRef = useRef(new Uint8Array(128));
+  const smoothedFreqRef = useRef(new Float32Array(128));
+  const toolSmoothedFreqRef = useRef(new Float32Array(128));
+  const particlesRef = useRef([]);
+  const toolParticlesRef = useRef([]);
 
   // Tool recorder refs
   const toolMediaRecorderRef = useRef(null);
@@ -234,6 +565,78 @@ function App() {
       return () => mql.removeEventListener('change', handler);
     }
   }, [themePreference]);
+
+  // Apply accent color
+  useEffect(() => {
+    if (accentColor) {
+      applyAccentColor(accentColor);
+      localStorage.setItem('accentColor', accentColor);
+    } else {
+      clearAccentColor();
+      localStorage.removeItem('accentColor');
+    }
+  }, [accentColor, activeTheme]);
+
+  // Save viz mode preference
+  useEffect(() => {
+    localStorage.setItem('vizMode', vizMode);
+  }, [vizMode]);
+
+  // Siri ring animation for transcribe tab
+  useEffect(() => {
+    if (vizMode !== 'siri') {
+      if (siriAnimRef.current) cancelAnimationFrame(siriAnimRef.current);
+      return;
+    }
+
+    let lastTime = performance.now();
+    const animate = (now) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      siriTimeRef.current += dt;
+      const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
+      const active = isRecording && !isPaused;
+      drawSiriOrb(
+        siriCanvasRef.current, active ? audioLevel : 0, accent,
+        siriTimeRef.current, active ? freqDataRef.current : null,
+        smoothedFreqRef, particlesRef, dt
+      );
+      siriAnimRef.current = requestAnimationFrame(animate);
+    };
+
+    siriAnimRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (siriAnimRef.current) cancelAnimationFrame(siriAnimRef.current);
+    };
+  }, [vizMode, isRecording, isPaused, audioLevel, accentColor, activeTheme]);
+
+  // Siri ring animation for tool recorder tab
+  useEffect(() => {
+    if (vizMode !== 'siri') {
+      if (toolSiriAnimRef.current) cancelAnimationFrame(toolSiriAnimRef.current);
+      return;
+    }
+
+    let lastTime = performance.now();
+    const animate = (now) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      toolSiriTimeRef.current += dt;
+      const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
+      const active = toolIsRecording && !toolIsPaused;
+      drawSiriOrb(
+        toolSiriCanvasRef.current, active ? toolAudioLevel : 0, accent,
+        toolSiriTimeRef.current, active ? toolFreqDataRef.current : null,
+        toolSmoothedFreqRef, toolParticlesRef, dt
+      );
+      toolSiriAnimRef.current = requestAnimationFrame(animate);
+    };
+
+    toolSiriAnimRef.current = requestAnimationFrame(animate);
+    return () => {
+      if (toolSiriAnimRef.current) cancelAnimationFrame(toolSiriAnimRef.current);
+    };
+  }, [vizMode, toolIsRecording, toolIsPaused, toolAudioLevel, accentColor, activeTheme]);
 
   const cycleTheme = () => {
     if (activeTheme === 'dark') {
@@ -286,16 +689,21 @@ function App() {
     if (activeTab === 'settings') loadCachedModels();
   }, [activeTab]);
 
+  // Get current accent color for canvas drawing
+  const getCanvasAccentColor = useCallback(() => {
+    if (accentColor) return accentColor;
+    return activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+  }, [accentColor, activeTheme]);
+
   // Draw waveform when audio changes (transcribe tab)
   useEffect(() => {
     if (audioBufferData && waveformCanvasRef.current) {
       const canvas = waveformCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, audioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [audioBufferData, activeTheme]);
+  }, [audioBufferData, activeTheme, accentColor, getCanvasAccentColor]);
 
   // Draw trimmer waveform
   useEffect(() => {
@@ -303,10 +711,9 @@ function App() {
       const canvas = trimmerCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, audioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [audioBufferData, activeTheme, isTrimming]);
+  }, [audioBufferData, activeTheme, accentColor, isTrimming, getCanvasAccentColor]);
 
   // Draw tool waveform
   useEffect(() => {
@@ -314,10 +721,9 @@ function App() {
       const canvas = toolWaveformCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, toolAudioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [toolAudioBufferData, activeTheme]);
+  }, [toolAudioBufferData, activeTheme, accentColor, getCanvasAccentColor]);
 
   const loadCachedModels = async () => {
     setIsLoadingCache(true);
@@ -384,6 +790,7 @@ function App() {
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
         setAudioLevel(avg);
+        freqDataRef.current = dataArray;
         animationFrameRef.current = requestAnimationFrame(visualize);
       };
       visualize();
@@ -486,6 +893,7 @@ function App() {
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
         setToolAudioLevel(avg);
+        toolFreqDataRef.current = dataArray;
         toolAnimationFrameRef.current = requestAnimationFrame(visualize);
       };
       visualize();
@@ -869,6 +1277,35 @@ function App() {
     </div>
   );
 
+  const renderVizToggle = () => (
+    <div className="viz-toggle">
+      <button
+        className={`viz-toggle-btn ${vizMode === 'bars' ? 'active' : ''}`}
+        onClick={() => setVizMode('bars')}
+      >Barras</button>
+      <button
+        className={`viz-toggle-btn ${vizMode === 'siri' ? 'active' : ''}`}
+        onClick={() => setVizMode('siri')}
+      >Anillo</button>
+    </div>
+  );
+
+  const renderVisualization = (level, active, canvasRef) => {
+    if (vizMode === 'siri') {
+      return (
+        <div className="siri-viz-container">
+          <canvas
+            ref={canvasRef}
+            className="siri-canvas"
+            width={600}
+            height={600}
+          />
+        </div>
+      );
+    }
+    return renderWaveform(level, active);
+  };
+
   const renderTimestampResult = () => {
     // Backend segments
     if (transcriptionSegments && transcriptionSegments.length > 0) {
@@ -1018,8 +1455,9 @@ function App() {
 
       {/* Recorder */}
       <div className="recorder-section">
-        <div className="viz-container">
-          {renderWaveform(audioLevel, isRecording && !isPaused)}
+        <div className={`viz-container ${isRecording ? 'recording' : ''}`}>
+          {renderVizToggle()}
+          {renderVisualization(audioLevel, isRecording && !isPaused, siriCanvasRef)}
           {isRecording && (
             <div className="rec-status">
               <span className={`rec-dot ${isPaused ? 'paused' : ''}`}></span>
@@ -1210,8 +1648,9 @@ function App() {
       </div>
 
       <div className="recorder-section">
-        <div className="viz-container">
-          {renderWaveform(toolAudioLevel, toolIsRecording && !toolIsPaused)}
+        <div className={`viz-container ${toolIsRecording ? 'recording' : ''}`}>
+          {renderVizToggle()}
+          {renderVisualization(toolAudioLevel, toolIsRecording && !toolIsPaused, toolSiriCanvasRef)}
           {toolIsRecording && (
             <div className="rec-status">
               <span className={`rec-dot ${toolIsPaused ? 'paused' : ''}`}></span>
@@ -1418,6 +1857,55 @@ function App() {
         </div>
       </div>
 
+      {/* Accent Color */}
+      <div className="settings-card">
+        <h3>Color de acento</h3>
+        <div className="color-presets">
+          {ACCENT_PRESETS.map(preset => (
+            <button
+              key={preset.hex}
+              className={`color-swatch ${accentColor === preset.hex ? 'selected' : ''}`}
+              style={{ background: preset.hex }}
+              onClick={() => setAccentColor(accentColor === preset.hex ? '' : preset.hex)}
+              title={preset.name}
+            />
+          ))}
+        </div>
+        <div className="custom-color-row">
+          <input
+            type="color"
+            className="custom-color-input"
+            value={accentColor || '#06b6d4'}
+            onChange={(e) => setAccentColor(e.target.value)}
+          />
+          <span className="custom-color-label">Color personalizado</span>
+          {accentColor && (
+            <button className="color-reset-btn" onClick={() => setAccentColor('')}>
+              Restablecer
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Visualizer Mode */}
+      <div className="settings-card">
+        <h3>Visualizador de voz</h3>
+        <div className="theme-options">
+          {[
+            { value: 'bars', label: 'Barras' },
+            { value: 'siri', label: 'Anillo' }
+          ].map(opt => (
+            <button
+              key={opt.value}
+              className={`theme-opt ${vizMode === opt.value ? 'sel' : ''}`}
+              onClick={() => setVizMode(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="settings-card">
         <h3>WebGPU</h3>
         <div className={`status-indicator ${webGPUSupport.supported ? 'ok' : 'err'}`}>
@@ -1505,8 +1993,8 @@ function App() {
             <path d="M14 6v16M10 9v10M18 9v10M7 12v4M21 12v4" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
             <defs>
               <linearGradient id="hg" x1="0" y1="0" x2="28" y2="28">
-                <stop offset="0%" stopColor="#06b6d4"/>
-                <stop offset="100%" stopColor="#0891b2"/>
+                <stop offset="0%" stopColor={accentColor || '#06b6d4'}/>
+                <stop offset="100%" stopColor={accentColor ? `${accentColor}cc` : '#0891b2'}/>
               </linearGradient>
             </defs>
           </svg>
