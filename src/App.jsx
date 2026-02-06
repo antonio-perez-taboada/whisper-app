@@ -88,6 +88,147 @@ function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
   ctx.globalAlpha = 1;
 }
 
+// Color utility: hex to RGB
+function hexToRgb(hex) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 6, g: 182, b: 212 };
+}
+
+// Color utility: hex to HSL
+function hexToHsl(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const r1 = r / 255, g1 = g / 255, b1 = b / 255;
+  const max = Math.max(r1, g1, b1), min = Math.min(r1, g1, b1);
+  let h, s, l = (max + min) / 2;
+
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r1: h = ((g1 - b1) / d + (g1 < b1 ? 6 : 0)) / 6; break;
+      case g1: h = ((b1 - r1) / d + 2) / 6; break;
+      case b1: h = ((r1 - g1) / d + 4) / 6; break;
+    }
+  }
+  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+// Apply accent color to CSS custom properties
+function applyAccentColor(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const { h, s, l } = hexToHsl(hex);
+  const root = document.documentElement;
+
+  root.style.setProperty('--accent', hex);
+  root.style.setProperty('--accent-2', `hsl(${h}, ${Math.min(s + 10, 100)}%, ${Math.min(l + 10, 90)}%)`);
+  root.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.1)`);
+  root.style.setProperty('--accent-border', `rgba(${r}, ${g}, ${b}, 0.2)`);
+  root.style.setProperty('--accent-glow', `rgba(${r}, ${g}, ${b}, 0.3)`);
+  root.style.setProperty('--waveform-color', hex);
+  root.style.setProperty('--waveform-bg', `rgba(${r}, ${g}, ${b}, 0.15)`);
+}
+
+// Clear custom accent (revert to theme defaults)
+function clearAccentColor() {
+  const root = document.documentElement;
+  const props = ['--accent', '--accent-2', '--accent-bg', '--accent-border', '--accent-glow', '--waveform-color', '--waveform-bg'];
+  props.forEach(p => root.style.removeProperty(p));
+}
+
+// Preset accent colors
+const ACCENT_PRESETS = [
+  { name: 'Cyan', hex: '#06b6d4' },
+  { name: 'Blue', hex: '#3b82f6' },
+  { name: 'Violet', hex: '#8b5cf6' },
+  { name: 'Pink', hex: '#ec4899' },
+  { name: 'Rose', hex: '#f43f5e' },
+  { name: 'Orange', hex: '#f97316' },
+  { name: 'Amber', hex: '#f59e0b' },
+  { name: 'Lime', hex: '#84cc16' },
+  { name: 'Green', hex: '#10b981' },
+  { name: 'Teal', hex: '#14b8a6' },
+  { name: 'Indigo', hex: '#6366f1' },
+  { name: 'Red', hex: '#ef4444' },
+];
+
+// Siri Ring Visualizer - draws on a canvas
+function drawSiriRing(canvas, audioLevel, accentHex, time) {
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const size = canvas.width;
+  const center = size / 2;
+  const { r, g, b } = hexToRgb(accentHex);
+
+  ctx.clearRect(0, 0, size, size);
+
+  const normalizedLevel = Math.min(audioLevel / 180, 1);
+  const baseRadius = size * 0.28;
+  const pulseAmount = normalizedLevel * size * 0.08;
+
+  // Outer glow layers
+  for (let i = 3; i >= 0; i--) {
+    const glowRadius = baseRadius + pulseAmount + i * 12;
+    const alpha = 0.03 + normalizedLevel * 0.04;
+    const gradient = ctx.createRadialGradient(center, center, glowRadius * 0.5, center, center, glowRadius);
+    gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
+    gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(center, center, glowRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Draw morphing ring with frequency distortion
+  const segments = 128;
+  const baseAlpha = 0.6 + normalizedLevel * 0.4;
+
+  for (let layer = 0; layer < 3; layer++) {
+    const layerOffset = layer * 0.7;
+    const layerRadius = baseRadius + pulseAmount * (1 - layer * 0.2);
+    const layerAlpha = baseAlpha * (1 - layer * 0.25);
+    const lineWidth = (3 - layer) + normalizedLevel * 2;
+
+    ctx.beginPath();
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${layerAlpha})`;
+    ctx.lineWidth = lineWidth;
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${layerAlpha * 0.6})`;
+    ctx.shadowBlur = 10 + normalizedLevel * 20;
+
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+      const distortion = normalizedLevel * 8 * (
+        Math.sin(angle * 3 + time * 2 + layerOffset) * 0.5 +
+        Math.sin(angle * 5 - time * 1.5 + layerOffset) * 0.3 +
+        Math.sin(angle * 7 + time * 3 + layerOffset) * 0.2
+      );
+      const r2 = layerRadius + distortion;
+      const x = center + Math.cos(angle) * r2;
+      const y = center + Math.sin(angle) * r2;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Inner gradient fill
+  const innerGradient = ctx.createRadialGradient(center, center, 0, center, center, baseRadius * 0.8);
+  innerGradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.05 + normalizedLevel * 0.08})`);
+  innerGradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+  ctx.fillStyle = innerGradient;
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+  ctx.beginPath();
+  ctx.arc(center, center, baseRadius + pulseAmount, 0, Math.PI * 2);
+  ctx.fill();
+}
+
 // Decode audio blob to AudioBuffer and extract mono channel
 async function decodeAudioBlob(blob) {
   const arrayBuffer = await blob.arrayBuffer();
@@ -172,6 +313,16 @@ function App() {
   );
   const [activeTheme, setActiveTheme] = useState(getInitialTheme);
 
+  // Accent color (independent of theme)
+  const [accentColor, setAccentColor] = useState(
+    () => localStorage.getItem('accentColor') || ''
+  );
+
+  // Visualizer mode ('bars' or 'siri')
+  const [vizMode, setVizMode] = useState(
+    () => localStorage.getItem('vizMode') || 'bars'
+  );
+
   // Recorder tool states
   const [toolIsRecording, setToolIsRecording] = useState(false);
   const [toolIsPaused, setToolIsPaused] = useState(false);
@@ -194,6 +345,14 @@ function App() {
   const audioPlayerRef = useRef(null);
   const waveformCanvasRef = useRef(null);
   const trimmerCanvasRef = useRef(null);
+
+  // Siri visualizer refs
+  const siriCanvasRef = useRef(null);
+  const siriAnimRef = useRef(null);
+  const siriTimeRef = useRef(0);
+  const toolSiriCanvasRef = useRef(null);
+  const toolSiriAnimRef = useRef(null);
+  const toolSiriTimeRef = useRef(0);
 
   // Tool recorder refs
   const toolMediaRecorderRef = useRef(null);
@@ -234,6 +393,62 @@ function App() {
       return () => mql.removeEventListener('change', handler);
     }
   }, [themePreference]);
+
+  // Apply accent color
+  useEffect(() => {
+    if (accentColor) {
+      applyAccentColor(accentColor);
+      localStorage.setItem('accentColor', accentColor);
+    } else {
+      clearAccentColor();
+      localStorage.removeItem('accentColor');
+    }
+  }, [accentColor, activeTheme]);
+
+  // Save viz mode preference
+  useEffect(() => {
+    localStorage.setItem('vizMode', vizMode);
+  }, [vizMode]);
+
+  // Siri ring animation for transcribe tab
+  useEffect(() => {
+    if (vizMode !== 'siri') {
+      if (siriAnimRef.current) cancelAnimationFrame(siriAnimRef.current);
+      return;
+    }
+
+    const animate = () => {
+      siriTimeRef.current += 0.016;
+      const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
+      drawSiriRing(siriCanvasRef.current, isRecording && !isPaused ? audioLevel : 0, accent, siriTimeRef.current);
+      siriAnimRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+    return () => {
+      if (siriAnimRef.current) cancelAnimationFrame(siriAnimRef.current);
+    };
+  }, [vizMode, isRecording, isPaused, audioLevel, accentColor, activeTheme]);
+
+  // Siri ring animation for tool recorder tab
+  useEffect(() => {
+    if (vizMode !== 'siri') {
+      if (toolSiriAnimRef.current) cancelAnimationFrame(toolSiriAnimRef.current);
+      return;
+    }
+
+    const animate = () => {
+      toolSiriTimeRef.current += 0.016;
+      const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
+      drawSiriRing(toolSiriCanvasRef.current, toolIsRecording && !toolIsPaused ? toolAudioLevel : 0, accent, toolSiriTimeRef.current);
+      toolSiriAnimRef.current = requestAnimationFrame(animate);
+    };
+
+    animate();
+    return () => {
+      if (toolSiriAnimRef.current) cancelAnimationFrame(toolSiriAnimRef.current);
+    };
+  }, [vizMode, toolIsRecording, toolIsPaused, toolAudioLevel, accentColor, activeTheme]);
 
   const cycleTheme = () => {
     if (activeTheme === 'dark') {
@@ -286,16 +501,21 @@ function App() {
     if (activeTab === 'settings') loadCachedModels();
   }, [activeTab]);
 
+  // Get current accent color for canvas drawing
+  const getCanvasAccentColor = useCallback(() => {
+    if (accentColor) return accentColor;
+    return activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+  }, [accentColor, activeTheme]);
+
   // Draw waveform when audio changes (transcribe tab)
   useEffect(() => {
     if (audioBufferData && waveformCanvasRef.current) {
       const canvas = waveformCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, audioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [audioBufferData, activeTheme]);
+  }, [audioBufferData, activeTheme, accentColor, getCanvasAccentColor]);
 
   // Draw trimmer waveform
   useEffect(() => {
@@ -303,10 +523,9 @@ function App() {
       const canvas = trimmerCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, audioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [audioBufferData, activeTheme, isTrimming]);
+  }, [audioBufferData, activeTheme, accentColor, isTrimming, getCanvasAccentColor]);
 
   // Draw tool waveform
   useEffect(() => {
@@ -314,10 +533,9 @@ function App() {
       const canvas = toolWaveformCanvasRef.current;
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
-      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent');
+      drawWaveformOnCanvas(canvas, toolAudioBufferData, getCanvasAccentColor(), 'transparent');
     }
-  }, [toolAudioBufferData, activeTheme]);
+  }, [toolAudioBufferData, activeTheme, accentColor, getCanvasAccentColor]);
 
   const loadCachedModels = async () => {
     setIsLoadingCache(true);
@@ -869,6 +1087,35 @@ function App() {
     </div>
   );
 
+  const renderVizToggle = () => (
+    <div className="viz-toggle">
+      <button
+        className={`viz-toggle-btn ${vizMode === 'bars' ? 'active' : ''}`}
+        onClick={() => setVizMode('bars')}
+      >Barras</button>
+      <button
+        className={`viz-toggle-btn ${vizMode === 'siri' ? 'active' : ''}`}
+        onClick={() => setVizMode('siri')}
+      >Anillo</button>
+    </div>
+  );
+
+  const renderVisualization = (level, active, canvasRef) => {
+    if (vizMode === 'siri') {
+      return (
+        <div className="siri-viz-container">
+          <canvas
+            ref={canvasRef}
+            className="siri-canvas"
+            width={400}
+            height={400}
+          />
+        </div>
+      );
+    }
+    return renderWaveform(level, active);
+  };
+
   const renderTimestampResult = () => {
     // Backend segments
     if (transcriptionSegments && transcriptionSegments.length > 0) {
@@ -1018,8 +1265,9 @@ function App() {
 
       {/* Recorder */}
       <div className="recorder-section">
-        <div className="viz-container">
-          {renderWaveform(audioLevel, isRecording && !isPaused)}
+        <div className={`viz-container ${isRecording ? 'recording' : ''}`}>
+          {renderVizToggle()}
+          {renderVisualization(audioLevel, isRecording && !isPaused, siriCanvasRef)}
           {isRecording && (
             <div className="rec-status">
               <span className={`rec-dot ${isPaused ? 'paused' : ''}`}></span>
@@ -1210,8 +1458,9 @@ function App() {
       </div>
 
       <div className="recorder-section">
-        <div className="viz-container">
-          {renderWaveform(toolAudioLevel, toolIsRecording && !toolIsPaused)}
+        <div className={`viz-container ${toolIsRecording ? 'recording' : ''}`}>
+          {renderVizToggle()}
+          {renderVisualization(toolAudioLevel, toolIsRecording && !toolIsPaused, toolSiriCanvasRef)}
           {toolIsRecording && (
             <div className="rec-status">
               <span className={`rec-dot ${toolIsPaused ? 'paused' : ''}`}></span>
@@ -1418,6 +1667,55 @@ function App() {
         </div>
       </div>
 
+      {/* Accent Color */}
+      <div className="settings-card">
+        <h3>Color de acento</h3>
+        <div className="color-presets">
+          {ACCENT_PRESETS.map(preset => (
+            <button
+              key={preset.hex}
+              className={`color-swatch ${accentColor === preset.hex ? 'selected' : ''}`}
+              style={{ background: preset.hex }}
+              onClick={() => setAccentColor(accentColor === preset.hex ? '' : preset.hex)}
+              title={preset.name}
+            />
+          ))}
+        </div>
+        <div className="custom-color-row">
+          <input
+            type="color"
+            className="custom-color-input"
+            value={accentColor || '#06b6d4'}
+            onChange={(e) => setAccentColor(e.target.value)}
+          />
+          <span className="custom-color-label">Color personalizado</span>
+          {accentColor && (
+            <button className="color-reset-btn" onClick={() => setAccentColor('')}>
+              Restablecer
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Visualizer Mode */}
+      <div className="settings-card">
+        <h3>Visualizador de voz</h3>
+        <div className="theme-options">
+          {[
+            { value: 'bars', label: 'Barras' },
+            { value: 'siri', label: 'Anillo' }
+          ].map(opt => (
+            <button
+              key={opt.value}
+              className={`theme-opt ${vizMode === opt.value ? 'sel' : ''}`}
+              onClick={() => setVizMode(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="settings-card">
         <h3>WebGPU</h3>
         <div className={`status-indicator ${webGPUSupport.supported ? 'ok' : 'err'}`}>
@@ -1505,8 +1803,8 @@ function App() {
             <path d="M14 6v16M10 9v10M18 9v10M7 12v4M21 12v4" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
             <defs>
               <linearGradient id="hg" x1="0" y1="0" x2="28" y2="28">
-                <stop offset="0%" stopColor="#06b6d4"/>
-                <stop offset="100%" stopColor="#0891b2"/>
+                <stop offset="0%" stopColor={accentColor || '#06b6d4'}/>
+                <stop offset="100%" stopColor={accentColor ? `${accentColor}cc` : '#0891b2'}/>
               </linearGradient>
             </defs>
           </svg>
