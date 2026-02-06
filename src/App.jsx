@@ -1,48 +1,187 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 import { transcriptionService } from './transcriptionService';
 import InstallPrompt from './InstallPrompt';
 
+// WAV encoder utility
+function encodeWAV(audioBuffer) {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const bitDepth = 16;
+
+  const channels = [];
+  for (let i = 0; i < numChannels; i++) {
+    channels.push(audioBuffer.getChannelData(i));
+  }
+
+  const length = channels[0].length;
+  const interleaved = new Float32Array(length * numChannels);
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      interleaved[i * numChannels + ch] = channels[ch][i];
+    }
+  }
+
+  const dataLength = interleaved.length * (bitDepth / 8);
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * (bitDepth / 8), true);
+  view.setUint16(32, numChannels * (bitDepth / 8), true);
+  view.setUint16(34, bitDepth, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < interleaved.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+
+  return buffer;
+}
+
+// Draw waveform on canvas from audio data
+function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
+  if (!canvas || !audioData) return;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+
+  ctx.fillStyle = bgColor || 'transparent';
+  ctx.fillRect(0, 0, width, height);
+
+  const step = Math.ceil(audioData.length / width);
+  const amp = height / 2;
+
+  ctx.fillStyle = accentColor || '#06b6d4';
+  ctx.globalAlpha = 0.8;
+
+  for (let i = 0; i < width; i++) {
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = 0; j < step; j++) {
+      const datum = audioData[i * step + j];
+      if (datum === undefined) break;
+      if (datum < min) min = datum;
+      if (datum > max) max = datum;
+    }
+    const yLow = (1 + min) * amp;
+    const yHigh = (1 + max) * amp;
+    ctx.fillRect(i, yLow, 1, Math.max(1, yHigh - yLow));
+  }
+
+  ctx.globalAlpha = 1;
+}
+
+// Decode audio blob to AudioBuffer and extract mono channel
+async function decodeAudioBlob(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioCtx = new AudioContext();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  await audioCtx.close();
+  return audioBuffer;
+}
+
+// Get theme from preferences
+function getInitialTheme() {
+  const saved = localStorage.getItem('themePreference');
+  if (saved === 'light' || saved === 'dark') return saved;
+  // 'system' or default: use prefers-color-scheme
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+    return 'light';
+  }
+  return 'dark';
+}
+
 function App() {
-  // Navigation state
-  const [activeSection, setActiveSection] = useState('record');
+  // Navigation
+  const [activeTab, setActiveTab] = useState('transcribe');
 
   // Recording states
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [transcription, setTranscription] = useState('');
-  const [originalText, setOriginalText] = useState('');
-  const [translatedText, setTranslatedText] = useState('');
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [copied, setCopied] = useState(false);
-  const [mode, setMode] = useState('webgpu');
+  const [audioLevel, setAudioLevel] = useState(0);
+
+  // Transcription states
+  const [transcription, setTranscription] = useState('');
+  const [transcriptionSegments, setTranscriptionSegments] = useState(null);
+  const [transcriptionChunks, setTranscriptionChunks] = useState(null);
+  const [detectedLanguage, setDetectedLanguage] = useState(null);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const [modelLoadProgress, setModelLoadProgress] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [enableTimestamps, setEnableTimestamps] = useState(false);
+
+  // Audio playback
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState(null);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState(null);
+  const [audioBufferData, setAudioBufferData] = useState(null);
+
+  // Mode & model
+  const [mode, setMode] = useState('webgpu');
   const [backendAvailable, setBackendAvailable] = useState(false);
   const [selectedModel, setSelectedModel] = useState(
     transcriptionService.isMobileDevice() ? 'base' : 'auto'
   );
   const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
-  const [inputLanguage, setInputLanguage] = useState('es');
-  const [outputLanguage, setOutputLanguage] = useState('same');
-  const [isLanguageSelectorOpen, setIsLanguageSelectorOpen] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speechSynthesis, setSpeechSynthesis] = useState(null);
-  const [ttsMethod, setTtsMethod] = useState(null);
 
-  // Upload states
+  // Language & task
+  const [inputLanguage, setInputLanguage] = useState('es');
+  const [task, setTask] = useState('transcribe');
+  const [isLanguageSelectorOpen, setIsLanguageSelectorOpen] = useState(false);
+
+  // Upload
   const [uploadedFile, setUploadedFile] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // History states
+  // Trimmer
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(1);
+  const [audioDuration, setAudioDuration] = useState(0);
+  const [isTrimming, setIsTrimming] = useState(false);
+  const [trimDragging, setTrimDragging] = useState(null);
+
+  // History
   const [history, setHistory] = useState([]);
 
-  // Settings states
+  // Settings
   const [cachedModels, setCachedModels] = useState([]);
   const [totalCacheSize, setTotalCacheSize] = useState({ bytes: 0, formatted: '0 KB' });
   const [webGPUSupport, setWebGPUSupport] = useState({ supported: null, reason: '' });
   const [isLoadingCache, setIsLoadingCache] = useState(false);
+
+  // Theme
+  const [themePreference, setThemePreference] = useState(
+    () => localStorage.getItem('themePreference') || 'system'
+  );
+  const [activeTheme, setActiveTheme] = useState(getInitialTheme);
+
+  // Recorder tool states
+  const [toolIsRecording, setToolIsRecording] = useState(false);
+  const [toolIsPaused, setToolIsPaused] = useState(false);
+  const [toolRecordingTime, setToolRecordingTime] = useState(0);
+  const [toolAudioLevel, setToolAudioLevel] = useState(0);
+  const [toolAudioUrl, setToolAudioUrl] = useState(null);
+  const [toolAudioBlob, setToolAudioBlob] = useState(null);
+  const [toolSpeed, setToolSpeed] = useState(1.0);
+  const [isProcessingDownload, setIsProcessingDownload] = useState(false);
+  const [toolAudioBufferData, setToolAudioBufferData] = useState(null);
 
   // Refs
   const mediaRecorderRef = useRef(null);
@@ -51,100 +190,183 @@ function App() {
   const animationFrameRef = useRef(null);
   const analyserRef = useRef(null);
   const timerIntervalRef = useRef(null);
-  const audioElementRef = useRef(null);
   const fileInputRef = useRef(null);
+  const audioPlayerRef = useRef(null);
+  const waveformCanvasRef = useRef(null);
+  const trimmerCanvasRef = useRef(null);
 
-  // Load history from localStorage on mount
+  // Tool recorder refs
+  const toolMediaRecorderRef = useRef(null);
+  const toolAudioChunksRef = useRef([]);
+  const toolStreamRef = useRef(null);
+  const toolAnimationFrameRef = useRef(null);
+  const toolAnalyserRef = useRef(null);
+  const toolTimerIntervalRef = useRef(null);
+  const toolAudioPlayerRef = useRef(null);
+  const toolWaveformCanvasRef = useRef(null);
+
+  // ===== THEME =====
   useEffect(() => {
-    const savedHistory = localStorage.getItem('transcriptionHistory');
-    if (savedHistory) {
-      try {
-        setHistory(JSON.parse(savedHistory));
-      } catch (e) {
-        console.error('Error loading history:', e);
+    const resolveTheme = () => {
+      if (themePreference === 'light' || themePreference === 'dark') {
+        return themePreference;
       }
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+        return 'light';
+      }
+      return 'dark';
+    };
+
+    const resolved = resolveTheme();
+    setActiveTheme(resolved);
+    document.documentElement.setAttribute('data-theme', resolved);
+    localStorage.setItem('themePreference', themePreference);
+
+    // Listen for system theme changes when preference is 'system'
+    if (themePreference === 'system') {
+      const mql = window.matchMedia('(prefers-color-scheme: light)');
+      const handler = (e) => {
+        const newTheme = e.matches ? 'light' : 'dark';
+        setActiveTheme(newTheme);
+        document.documentElement.setAttribute('data-theme', newTheme);
+      };
+      mql.addEventListener('change', handler);
+      return () => mql.removeEventListener('change', handler);
+    }
+  }, [themePreference]);
+
+  const cycleTheme = () => {
+    if (activeTheme === 'dark') {
+      setThemePreference('light');
+    } else {
+      setThemePreference('dark');
+    }
+  };
+
+  // Load history
+  useEffect(() => {
+    const saved = localStorage.getItem('transcriptionHistory');
+    if (saved) {
+      try { setHistory(JSON.parse(saved)); } catch (e) { console.error(e); }
     }
   }, []);
 
-  // Save history to localStorage whenever it changes
   useEffect(() => {
     if (history.length > 0) {
       localStorage.setItem('transcriptionHistory', JSON.stringify(history));
     }
   }, [history]);
 
+  // Check backend & WebGPU
   useEffect(() => {
-    const checkBackend = async () => {
+    const init = async () => {
       const available = await transcriptionService.checkBackendAvailability();
       setBackendAvailable(available);
       if (available) {
         setMode('backend');
         transcriptionService.setMode('backend');
       }
-    };
-
-    const checkWebGPU = async () => {
       const support = await transcriptionService.checkWebGPUSupport();
       setWebGPUSupport(support);
     };
-
-    checkBackend();
-    checkWebGPU();
+    init();
 
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
-      if (window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
-      if (audioElementRef.current) {
-        audioElementRef.current.pause();
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (toolStreamRef.current) toolStreamRef.current.getTracks().forEach(t => t.stop());
+      if (toolAnimationFrameRef.current) cancelAnimationFrame(toolAnimationFrameRef.current);
+      if (toolTimerIntervalRef.current) clearInterval(toolTimerIntervalRef.current);
     };
   }, []);
 
-  // Load cached models when settings section is opened
+  // Load cache when settings tab
   useEffect(() => {
-    if (activeSection === 'settings') {
-      loadCachedModels();
+    if (activeTab === 'settings') loadCachedModels();
+  }, [activeTab]);
+
+  // Draw waveform when audio changes (transcribe tab)
+  useEffect(() => {
+    if (audioBufferData && waveformCanvasRef.current) {
+      const canvas = waveformCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
     }
-  }, [activeSection]);
+  }, [audioBufferData, activeTheme]);
+
+  // Draw trimmer waveform
+  useEffect(() => {
+    if (audioBufferData && trimmerCanvasRef.current) {
+      const canvas = trimmerCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+    }
+  }, [audioBufferData, activeTheme, isTrimming]);
+
+  // Draw tool waveform
+  useEffect(() => {
+    if (toolAudioBufferData && toolWaveformCanvasRef.current) {
+      const canvas = toolWaveformCanvasRef.current;
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 160;
+      const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
+      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent');
+    }
+  }, [toolAudioBufferData, activeTheme]);
 
   const loadCachedModels = async () => {
     setIsLoadingCache(true);
     try {
       const models = await transcriptionService.getCachedModels();
-      const totalSize = await transcriptionService.getTotalCacheSize();
+      const size = await transcriptionService.getTotalCacheSize();
       setCachedModels(models);
-      setTotalCacheSize(totalSize);
-    } catch (error) {
-      console.error('Error loading cached models:', error);
-    } finally {
-      setIsLoadingCache(false);
-    }
+      setTotalCacheSize(size);
+    } catch (e) { console.error(e); }
+    finally { setIsLoadingCache(false); }
   };
 
-  const handleDeleteModel = async (modelName) => {
-    if (confirm(`¿Eliminar el modelo ${modelName.replace('Xenova/whisper-', '').toUpperCase()}? Tendrás que descargarlo de nuevo si lo necesitas.`)) {
-      await transcriptionService.deleteCachedModel(modelName);
-      await loadCachedModels();
-    }
+  const formatTime = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleClearAllCache = async () => {
-    if (confirm('¿Eliminar todos los modelos cacheados? Tendrás que descargarlos de nuevo.')) {
-      await transcriptionService.clearAllCachedModels();
-      await loadCachedModels();
-    }
+  const formatTimePrecise = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
   };
 
+  const formatDate = (iso) => {
+    return new Date(iso).toLocaleDateString('es-ES', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+  };
+
+  // Load audio buffer data for waveform visualization
+  const loadAudioBufferForWaveform = useCallback(async (blob, setBufferData, setDuration) => {
+    try {
+      const audioBuffer = await decodeAudioBlob(blob);
+      const channelData = audioBuffer.getChannelData(0);
+      setBufferData(channelData);
+      if (setDuration) {
+        setDuration(audioBuffer.duration);
+        setTrimStart(0);
+        setTrimEnd(audioBuffer.duration);
+      }
+    } catch (e) {
+      console.error('Error decoding audio for waveform:', e);
+    }
+  }, []);
+
+  // ===== TRANSCRIBE TAB RECORDING =====
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -160,8 +382,8 @@ function App() {
       const visualize = () => {
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteFrequencyData(dataArray);
-        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
-        setAudioLevel(average);
+        const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        setAudioLevel(avg);
         animationFrameRef.current = requestAnimationFrame(visualize);
       };
       visualize();
@@ -170,30 +392,39 @@ function App() {
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        await transcribeAudio(audioBlob, 'recording');
-        audioChunksRef.current = [];
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+        const url = URL.createObjectURL(blob);
+        setRecordedAudioUrl(url);
+        setRecordedAudioBlob(blob);
+        loadAudioBufferForWaveform(blob, setAudioBufferData, setAudioDuration);
+        await transcribeAudio(blob, 'recording');
       };
 
       mediaRecorder.start();
       setIsRecording(true);
       setIsPaused(false);
       setRecordingTime(0);
+      setTranscription('');
+      setTranscriptionSegments(null);
+      setTranscriptionChunks(null);
+      setDetectedLanguage(null);
+      setRecordedAudioUrl(null);
+      setRecordedAudioBlob(null);
+      setAudioBufferData(null);
+      setIsTrimming(false);
 
       timerIntervalRef.current = setInterval(() => {
         setRecordingTime(prev => prev + 1);
       }, 1000);
-
     } catch (error) {
-      console.error('Error al iniciar grabación:', error);
-      alert('Error al acceder al micrófono. Por favor, permite el acceso.');
+      console.error('Error starting recording:', error);
+      alert('Error al acceder al microfono. Por favor, permite el acceso.');
     }
   };
 
@@ -202,15 +433,11 @@ function App() {
       if (isPaused) {
         mediaRecorderRef.current.resume();
         setIsPaused(false);
-        timerIntervalRef.current = setInterval(() => {
-          setRecordingTime(prev => prev + 1);
-        }, 1000);
+        timerIntervalRef.current = setInterval(() => setRecordingTime(p => p + 1), 1000);
       } else {
         mediaRecorderRef.current.pause();
         setIsPaused(true);
-        if (timerIntervalRef.current) {
-          clearInterval(timerIntervalRef.current);
-        }
+        clearInterval(timerIntervalRef.current);
       }
     }
   };
@@ -221,16 +448,9 @@ function App() {
       setIsRecording(false);
       setIsPaused(false);
       setAudioLevel(0);
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-      }
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     }
   };
 
@@ -242,138 +462,305 @@ function App() {
       setIsPaused(false);
       setAudioLevel(0);
       audioChunksRef.current = [];
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    }
+  };
 
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
+  // ===== TOOL RECORDER =====
+  const toolStartRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      toolStreamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      toolAnalyserRef.current = analyser;
+
+      const visualize = () => {
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        analyser.getByteFrequencyData(dataArray);
+        const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        setToolAudioLevel(avg);
+        toolAnimationFrameRef.current = requestAnimationFrame(visualize);
+      };
+      visualize();
+
+      const mediaRecorder = new MediaRecorder(stream);
+      toolMediaRecorderRef.current = mediaRecorder;
+      toolAudioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) toolAudioChunksRef.current.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(toolAudioChunksRef.current, { type: 'audio/wav' });
+        if (toolAudioUrl) URL.revokeObjectURL(toolAudioUrl);
+        const url = URL.createObjectURL(blob);
+        setToolAudioUrl(url);
+        setToolAudioBlob(blob);
+        loadAudioBufferForWaveform(blob, setToolAudioBufferData, null);
+      };
+
+      mediaRecorder.start();
+      setToolIsRecording(true);
+      setToolIsPaused(false);
+      setToolRecordingTime(0);
+      setToolAudioUrl(null);
+      setToolAudioBlob(null);
+      setToolSpeed(1.0);
+      setToolAudioBufferData(null);
+
+      toolTimerIntervalRef.current = setInterval(() => {
+        setToolRecordingTime(prev => prev + 1);
+      }, 1000);
+    } catch (error) {
+      console.error('Error starting tool recording:', error);
+      alert('Error al acceder al microfono.');
+    }
+  };
+
+  const toolPauseRecording = () => {
+    if (toolMediaRecorderRef.current && toolIsRecording) {
+      if (toolIsPaused) {
+        toolMediaRecorderRef.current.resume();
+        setToolIsPaused(false);
+        toolTimerIntervalRef.current = setInterval(() => setToolRecordingTime(p => p + 1), 1000);
+      } else {
+        toolMediaRecorderRef.current.pause();
+        setToolIsPaused(true);
+        clearInterval(toolTimerIntervalRef.current);
       }
     }
   };
 
-  const handleModeChange = (newMode) => {
-    setMode(newMode);
-    transcriptionService.setMode(newMode);
-    setTranscription('');
-    setModelLoadProgress(null);
+  const toolStopRecording = () => {
+    if (toolMediaRecorderRef.current && toolIsRecording) {
+      toolMediaRecorderRef.current.stop();
+      setToolIsRecording(false);
+      setToolIsPaused(false);
+      setToolAudioLevel(0);
+      if (toolStreamRef.current) toolStreamRef.current.getTracks().forEach(t => t.stop());
+      if (toolAnimationFrameRef.current) cancelAnimationFrame(toolAnimationFrameRef.current);
+      if (toolTimerIntervalRef.current) clearInterval(toolTimerIntervalRef.current);
+    }
   };
 
-  const handleModelChange = (newModel) => {
-    setSelectedModel(newModel);
-    transcriptionService.setSelectedModel(newModel);
-    setTranscription('');
-    setModelLoadProgress(null);
-    setIsModelSelectorOpen(false);
+  const toolCancelRecording = () => {
+    if (toolMediaRecorderRef.current && toolIsRecording) {
+      toolMediaRecorderRef.current.onstop = null;
+      toolMediaRecorderRef.current.stop();
+      setToolIsRecording(false);
+      setToolIsPaused(false);
+      setToolAudioLevel(0);
+      toolAudioChunksRef.current = [];
+      if (toolStreamRef.current) toolStreamRef.current.getTracks().forEach(t => t.stop());
+      if (toolAnimationFrameRef.current) cancelAnimationFrame(toolAnimationFrameRef.current);
+      if (toolTimerIntervalRef.current) clearInterval(toolTimerIntervalRef.current);
+    }
   };
 
-  const getModelInfo = (modelSize) => {
-    const models = {
-      'auto': {
-        name: 'Auto',
-        size: transcriptionService.isMobileDevice() ? '~40 MB' : '~150 MB',
-        desc: transcriptionService.isMobileDevice() ? 'Tiny en móvil, Small en desktop' : 'Optimizado para tu dispositivo'
-      },
-      'tiny': { name: 'Tiny', size: '~40 MB', desc: 'Rápido, menos preciso' },
-      'base': { name: 'Base', size: '~75 MB', desc: 'Equilibrado' },
-      'small': { name: 'Small', size: '~150 MB', desc: 'Más preciso, más lento' }
-    };
-    return models[modelSize] || models.auto;
-  };
+  const downloadAudioWithSpeed = useCallback(async () => {
+    if (!toolAudioBlob) return;
+    setIsProcessingDownload(true);
 
-  const getInputLanguages = () => [
-    { code: 'es', name: 'Español', flag: '🇪🇸' },
-    { code: 'en', name: 'English', flag: '🇺🇸' },
-    { code: 'fr', name: 'Français', flag: '🇫🇷' },
-    { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
-    { code: 'it', name: 'Italiano', flag: '🇮🇹' },
-    { code: 'pt', name: 'Português', flag: '🇵🇹' },
-    { code: 'zh', name: '中文', flag: '🇨🇳' },
-    { code: 'ja', name: '日本語', flag: '🇯🇵' },
-    { code: 'ko', name: '한국어', flag: '🇰🇷' },
-    { code: 'ru', name: 'Русский', flag: '🇷🇺' },
-    { code: 'ar', name: 'العربية', flag: '🇸🇦' },
-    { code: 'hi', name: 'हिन्दी', flag: '🇮🇳' },
-  ];
+    try {
+      const arrayBuffer = await toolAudioBlob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
 
-  const getOutputLanguages = () => [
-    { code: 'same', name: 'Mismo idioma', flag: '🔄' },
-    { code: 'en', name: 'English', flag: '🇺🇸' },
-    { code: 'es', name: 'Español', flag: '🇪🇸' },
-    { code: 'fr', name: 'Français', flag: '🇫🇷' },
-    { code: 'de', name: 'Deutsch', flag: '🇩🇪' },
-    { code: 'it', name: 'Italiano', flag: '🇮🇹' },
-    { code: 'pt', name: 'Português', flag: '🇵🇹' },
-  ];
+      const duration = decoded.duration / toolSpeed;
+      const offlineCtx = new OfflineAudioContext(
+        decoded.numberOfChannels,
+        Math.ceil(decoded.sampleRate * duration),
+        decoded.sampleRate
+      );
 
-  const getLanguageName = (code, type = 'input') => {
-    const languages = type === 'input' ? getInputLanguages() : getOutputLanguages();
-    const lang = languages.find(l => l.code === code);
-    return lang ? `${lang.flag} ${lang.name}` : code;
-  };
+      const source = offlineCtx.createBufferSource();
+      source.buffer = decoded;
+      source.playbackRate.value = toolSpeed;
+      source.connect(offlineCtx.destination);
+      source.start();
 
+      const rendered = await offlineCtx.startRendering();
+      const wavData = encodeWAV(rendered);
+      const wavBlob = new Blob([wavData], { type: 'audio/wav' });
+
+      const url = URL.createObjectURL(wavBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      const speedLabel = toolSpeed !== 1.0 ? `_${toolSpeed}x` : '';
+      a.download = `grabacion${speedLabel}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error processing audio:', error);
+      alert('Error al procesar el audio para descarga.');
+    } finally {
+      setIsProcessingDownload(false);
+    }
+  }, [toolAudioBlob, toolSpeed]);
+
+  // ===== AUDIO TRIMMER =====
+  const trimAndUseAudio = useCallback(async (action) => {
+    if (!recordedAudioBlob || !audioDuration) return;
+
+    try {
+      const arrayBuffer = await recordedAudioBlob.arrayBuffer();
+      const audioCtx = new AudioContext();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+      const startSample = Math.floor(trimStart * decoded.sampleRate);
+      const endSample = Math.floor(trimEnd * decoded.sampleRate);
+      const trimLength = endSample - startSample;
+
+      if (trimLength <= 0) return;
+
+      const trimmedBuffer = audioCtx.createBuffer(
+        decoded.numberOfChannels,
+        trimLength,
+        decoded.sampleRate
+      );
+
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const sourceData = decoded.getChannelData(ch);
+        const targetData = trimmedBuffer.getChannelData(ch);
+        for (let i = 0; i < trimLength; i++) {
+          targetData[i] = sourceData[startSample + i];
+        }
+      }
+
+      const wavData = encodeWAV(trimmedBuffer);
+      const trimmedBlob = new Blob([wavData], { type: 'audio/wav' });
+
+      if (action === 'transcribe') {
+        if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+        const url = URL.createObjectURL(trimmedBlob);
+        setRecordedAudioUrl(url);
+        setRecordedAudioBlob(trimmedBlob);
+        loadAudioBufferForWaveform(trimmedBlob, setAudioBufferData, setAudioDuration);
+        setIsTrimming(false);
+        await transcribeAudio(trimmedBlob, 'trimmed recording');
+      } else if (action === 'download') {
+        const url = URL.createObjectURL(trimmedBlob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'audio_recortado.wav';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      await audioCtx.close();
+    } catch (error) {
+      console.error('Error trimming audio:', error);
+      alert('Error al recortar el audio.');
+    }
+  }, [recordedAudioBlob, audioDuration, trimStart, trimEnd, recordedAudioUrl, loadAudioBufferForWaveform]);
+
+  const handleTrimmerMouseDown = useCallback((e, handle) => {
+    e.preventDefault();
+    setTrimDragging(handle);
+  }, []);
+
+  const handleTrimmerMouseMove = useCallback((e) => {
+    if (!trimDragging || !trimmerCanvasRef.current || !audioDuration) return;
+    const rect = trimmerCanvasRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const time = x * audioDuration;
+
+    if (trimDragging === 'start') {
+      setTrimStart(Math.min(time, trimEnd - 0.1));
+    } else if (trimDragging === 'end') {
+      setTrimEnd(Math.max(time, trimStart + 0.1));
+    }
+  }, [trimDragging, audioDuration, trimStart, trimEnd]);
+
+  const handleTrimmerMouseUp = useCallback(() => {
+    setTrimDragging(null);
+  }, []);
+
+  useEffect(() => {
+    if (trimDragging) {
+      window.addEventListener('mousemove', handleTrimmerMouseMove);
+      window.addEventListener('mouseup', handleTrimmerMouseUp);
+      window.addEventListener('touchmove', handleTrimmerTouchMove);
+      window.addEventListener('touchend', handleTrimmerMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleTrimmerMouseMove);
+        window.removeEventListener('mouseup', handleTrimmerMouseUp);
+        window.removeEventListener('touchmove', handleTrimmerTouchMove);
+        window.removeEventListener('touchend', handleTrimmerMouseUp);
+      };
+    }
+  }, [trimDragging, handleTrimmerMouseMove, handleTrimmerMouseUp]);
+
+  const handleTrimmerTouchMove = useCallback((e) => {
+    if (!trimDragging || !trimmerCanvasRef.current || !audioDuration) return;
+    const touch = e.touches[0];
+    const rect = trimmerCanvasRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width));
+    const time = x * audioDuration;
+
+    if (trimDragging === 'start') {
+      setTrimStart(Math.min(time, trimEnd - 0.1));
+    } else if (trimDragging === 'end') {
+      setTrimEnd(Math.max(time, trimStart + 0.1));
+    }
+  }, [trimDragging, audioDuration, trimStart, trimEnd]);
+
+  // ===== TRANSCRIPTION =====
   const transcribeAudio = async (audioBlob, source = 'recording') => {
     setIsTranscribing(true);
-    const modeText = mode === 'backend' ? 'servidor Python' : 'WebGPU (navegador)';
-    const willTranslate = outputLanguage !== 'same' && outputLanguage !== inputLanguage;
-    const initialMessage = willTranslate
-      ? `Procesando y traduciendo audio con IA (${modeText})... Esto puede tardar unos segundos.`
-      : `Procesando audio con IA (${modeText})... Esto puede tardar unos segundos.`;
-    setTranscription(initialMessage);
+    setTranscription('');
+    setTranscriptionSegments(null);
+    setTranscriptionChunks(null);
+    setDetectedLanguage(null);
 
     try {
       const result = await transcriptionService.transcribe(
         audioBlob,
         (progress) => {
           if (progress.status === 'progress') {
-            let percentage = 0;
+            let pct = 0;
             if (progress.progress !== undefined) {
-              percentage = progress.progress > 1 ? progress.progress : progress.progress * 100;
+              pct = progress.progress > 1 ? progress.progress : progress.progress * 100;
             } else if (progress.loaded && progress.total) {
-              percentage = (progress.loaded / progress.total) * 100;
+              pct = (progress.loaded / progress.total) * 100;
             }
-            setModelLoadProgress(Math.round(Math.max(0, Math.min(100, percentage))));
+            setModelLoadProgress(Math.round(Math.max(0, Math.min(100, pct))));
           }
         },
-        {
-          inputLanguage,
-          outputLanguage
-        }
+        { inputLanguage, task, timestamps: enableTimestamps }
       );
 
       if (result.success) {
         setTranscription(result.transcription);
+        if (result.segments) setTranscriptionSegments(result.segments);
+        if (result.chunks) setTranscriptionChunks(result.chunks);
+        if (result.detectedLanguage) setDetectedLanguage(result.detectedLanguage);
 
-        if (result.translated && result.originalText && result.translatedText) {
-          setOriginalText(result.originalText);
-          setTranslatedText(result.translatedText);
-        } else {
-          setOriginalText(result.originalText || result.transcription);
-          setTranslatedText('');
-        }
-
-        // Add to history
-        const historyEntry = {
+        const entry = {
           id: Date.now(),
           timestamp: new Date().toISOString(),
-          source: source,
+          source,
           inputLanguage,
-          outputLanguage,
-          originalText: result.originalText || result.transcription,
-          translatedText: result.translatedText || null,
+          task,
           transcription: result.transcription,
-          method: result.method
+          method: result.method,
+          detectedLanguage: result.detectedLanguage || null
         };
-        setHistory(prev => [historyEntry, ...prev].slice(0, 50)); // Keep last 50 entries
-
-        console.log(`Transcription completed using ${result.method}${result.translated ? ' (with translation)' : ''}`);
+        setHistory(prev => [entry, ...prev].slice(0, 50));
       } else {
         setTranscription('Error: No se pudo transcribir');
-        setOriginalText('');
-        setTranslatedText('');
       }
     } catch (error) {
       console.error('Transcription error:', error);
@@ -384,431 +771,215 @@ function App() {
     }
   };
 
-  // File upload handling
-  const handleFileSelect = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      processUploadedFile(file);
-    }
+  // ===== MODE & MODEL =====
+  const handleModeChange = (newMode) => {
+    setMode(newMode);
+    transcriptionService.setMode(newMode);
+    setTranscription('');
+    setModelLoadProgress(null);
   };
 
-  const handleDragOver = (event) => {
-    event.preventDefault();
-    setIsDragging(true);
+  const handleModelChange = (m) => {
+    setSelectedModel(m);
+    transcriptionService.setSelectedModel(m);
+    setTranscription('');
+    setModelLoadProgress(null);
+    setIsModelSelectorOpen(false);
   };
 
-  const handleDragLeave = (event) => {
-    event.preventDefault();
-    setIsDragging(false);
+  // ===== FILE UPLOAD =====
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file) processFile(file);
   };
 
-  const handleDrop = (event) => {
-    event.preventDefault();
-    setIsDragging(false);
-    const file = event.dataTransfer.files[0];
-    if (file) {
-      processUploadedFile(file);
-    }
-  };
-
-  const processUploadedFile = (file) => {
-    const validTypes = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/webm'];
-    if (!validTypes.some(type => file.type.includes(type.split('/')[1]))) {
+  const processFile = (file) => {
+    const valid = ['audio/wav', 'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/webm'];
+    if (!valid.some(t => file.type.includes(t.split('/')[1]))) {
       alert('Formato no soportado. Usa WAV, MP3, M4A, OGG o WebM.');
       return;
     }
     setUploadedFile(file);
+    if (recordedAudioUrl) URL.revokeObjectURL(recordedAudioUrl);
+    const url = URL.createObjectURL(file);
+    setRecordedAudioUrl(url);
+    setRecordedAudioBlob(file);
+    loadAudioBufferForWaveform(file, setAudioBufferData, setAudioDuration);
+    setIsTrimming(false);
   };
 
   const transcribeUploadedFile = async () => {
     if (!uploadedFile) return;
-
-    const audioBlob = new Blob([uploadedFile], { type: uploadedFile.type });
-    await transcribeAudio(audioBlob, `file: ${uploadedFile.name}`);
+    const blob = new Blob([uploadedFile], { type: uploadedFile.type });
+    await transcribeAudio(blob, `archivo: ${uploadedFile.name}`);
     setUploadedFile(null);
   };
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const formatDate = (isoString) => {
-    const date = new Date(isoString);
-    return date.toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getVoiceLanguageCode = (langCode) => {
-    const voiceMap = {
-      'es': 'es',
-      'en': 'en',
-      'fr': 'fr',
-      'de': 'de',
-      'it': 'it',
-      'pt': 'pt',
-      'zh': 'zh-CN',
-      'ja': 'ja',
-      'ko': 'ko',
-      'ru': 'ru',
-      'ar': 'ar',
-      'hi': 'hi'
-    };
-    return voiceMap[langCode] || 'en';
-  };
-
-  const speakWithGoogleTTS = async (text, lang) => {
-    try {
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${lang}&client=tw-ob&q=${encodeURIComponent(text)}`;
-
-      if (!audioElementRef.current) {
-        audioElementRef.current = new Audio();
-      }
-
-      const audio = audioElementRef.current;
-      audio.src = url;
-
-      return new Promise((resolve, reject) => {
-        audio.onloadeddata = () => {
-          setIsSpeaking(true);
-          setTtsMethod('api');
-          console.log('Using Google TTS API (natural voice)');
-          audio.play();
-          resolve(true);
-        };
-
-        audio.onended = () => {
-          setIsSpeaking(false);
-          setTtsMethod(null);
-        };
-
-        audio.onerror = (error) => {
-          console.error('Google TTS error:', error);
-          reject(error);
-        };
-
-        setTimeout(() => {
-          if (!audio.readyState || audio.readyState < 2) {
-            reject(new Error('Timeout loading audio'));
-          }
-        }, 5000);
-      });
-    } catch (error) {
-      console.error('Failed to use Google TTS:', error);
-      throw error;
-    }
-  };
-
-  const speakWithLocalVoice = (text, lang) => {
-    if (!window.speechSynthesis) {
-      alert('Tu navegador no soporta síntesis de voz');
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang;
-
-    const voices = window.speechSynthesis.getVoices();
-    const voice = voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-
-    if (voice) {
-      utterance.voice = voice;
-    }
-
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.volume = 1.0;
-
-    utterance.onstart = () => {
-      setIsSpeaking(true);
-      setTtsMethod('local');
-      console.log('Using local system voice (fallback)');
-    };
-
-    utterance.onend = () => {
-      setIsSpeaking(false);
-      setTtsMethod(null);
-    };
-
-    utterance.onerror = (event) => {
-      console.error('Speech synthesis error:', event);
-      setIsSpeaking(false);
-      setTtsMethod(null);
-    };
-
-    setSpeechSynthesis(utterance);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const speakText = async (text, lang) => {
-    const textToSpeak = text || translatedText || transcription;
-    if (!textToSpeak || textToSpeak.includes('Error:') || textToSpeak.includes('Procesando')) {
-      return;
-    }
-
-    const speechLang = lang || (outputLanguage === 'same' ? inputLanguage : outputLanguage);
-    const langCode = getVoiceLanguageCode(speechLang);
-
-    try {
-      await speakWithGoogleTTS(textToSpeak, langCode);
-    } catch (error) {
-      console.log('Falling back to local system voice');
-      speakWithLocalVoice(textToSpeak, langCode);
-    }
-  };
-
-  const stopSpeech = () => {
-    if (audioElementRef.current) {
-      audioElementRef.current.pause();
-      audioElementRef.current.currentTime = 0;
-    }
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    setIsSpeaking(false);
-    setTtsMethod(null);
-  };
-
-  const deleteHistoryEntry = (id) => {
-    setHistory(prev => prev.filter(entry => entry.id !== id));
-  };
-
+  // ===== HISTORY =====
+  const deleteHistoryEntry = (id) => setHistory(prev => prev.filter(e => e.id !== id));
   const clearHistory = () => {
-    if (confirm('¿Eliminar todo el historial de transcripciones?')) {
+    if (confirm('Eliminar todo el historial?')) {
       setHistory([]);
       localStorage.removeItem('transcriptionHistory');
     }
   };
 
-  // Navigation icons
-  const NavIcon = ({ type }) => {
-    switch (type) {
-      case 'record':
-        return (
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="12" cy="12" r="8" />
-          </svg>
-        );
-      case 'upload':
-        return (
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-        );
-      case 'history':
-        return (
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <polyline points="12 6 12 12 16 14" />
-          </svg>
-        );
-      case 'settings':
-        return (
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M12 1v6m0 6v10M4.22 4.22l4.24 4.24m7.08 7.08l4.24 4.24M1 12h6m6 0h10M4.22 19.78l4.24-4.24m7.08-7.08l4.24-4.24" />
-          </svg>
-        );
-      default:
-        return null;
+  // ===== SETTINGS =====
+  const handleDeleteModel = async (name) => {
+    if (confirm(`Eliminar el modelo ${name.replace('Xenova/whisper-', '').toUpperCase()}?`)) {
+      await transcriptionService.deleteCachedModel(name);
+      await loadCachedModels();
     }
   };
 
-  // Render sections
-  const renderRecordSection = () => (
-    <>
-      {backendAvailable ? (
-        <div className="mode-toggle-container">
-          <div className="mode-toggle">
+  const handleClearAllCache = async () => {
+    if (confirm('Eliminar todos los modelos cacheados?')) {
+      await transcriptionService.clearAllCachedModels();
+      await loadCachedModels();
+    }
+  };
+
+  const languages = transcriptionService.getSupportedLanguages();
+  const currentLang = languages.find(l => l.code === inputLanguage);
+
+  // Format timestamp for display (seconds -> MM:SS.s)
+  const formatTimestamp = (seconds) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 10);
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms}`;
+  };
+
+  // ===== RENDER FUNCTIONS =====
+
+  const renderWaveform = (level, active, barCount = 20) => (
+    <div className="waveform">
+      {[...Array(barCount)].map((_, i) => (
+        <div
+          key={i}
+          className={`wf-bar ${active ? 'active' : ''}`}
+          style={{
+            height: active
+              ? `${Math.random() * level * 2.5 + 12}%`
+              : '12%',
+            animationDelay: `${i * 0.05}s`
+          }}
+        />
+      ))}
+    </div>
+  );
+
+  const renderTimestampResult = () => {
+    // Backend segments
+    if (transcriptionSegments && transcriptionSegments.length > 0) {
+      return (
+        <div className="timestamp-segments">
+          {transcriptionSegments.map((seg, i) => (
+            <div key={i} className="timestamp-segment">
+              <span className="ts-time">{formatTimestamp(seg.start)} - {formatTimestamp(seg.end)}</span>
+              <span className="ts-text">{seg.text}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // WebGPU chunks
+    if (transcriptionChunks && transcriptionChunks.length > 0) {
+      return (
+        <div className="timestamp-segments">
+          {transcriptionChunks.map((chunk, i) => (
+            <div key={i} className="timestamp-segment">
+              <span className="ts-time">
+                {chunk.timestamp && chunk.timestamp[0] != null
+                  ? `${formatTimestamp(chunk.timestamp[0])} - ${chunk.timestamp[1] != null ? formatTimestamp(chunk.timestamp[1]) : '...'}`
+                  : ''}
+              </span>
+              <span className="ts-text">{chunk.text}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  const renderTranscribeTab = () => (
+    <div className="tab-content">
+      {/* Config bar */}
+      <div className="config-bar">
+        {backendAvailable && (
+          <div className="mode-switch">
             <button
-              className={`mode-btn ${mode === 'backend' ? 'active' : ''}`}
+              className={`mode-opt ${mode === 'backend' ? 'sel' : ''}`}
               onClick={() => handleModeChange('backend')}
               disabled={isRecording || isTranscribing}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M3 3a2 2 0 012-2h10a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V3z"/>
-                <rect x="6" y="5" width="8" height="2" rx="1" fill="#1a1a2e"/>
-                <rect x="6" y="9" width="6" height="2" rx="1" fill="#1a1a2e"/>
-                <rect x="6" y="13" width="8" height="2" rx="1" fill="#1a1a2e"/>
-              </svg>
-              <span>Backend Python</span>
-            </button>
+            >Backend</button>
             <button
-              className={`mode-btn ${mode === 'webgpu' ? 'active' : ''}`}
+              className={`mode-opt ${mode === 'webgpu' ? 'sel' : ''}`}
               onClick={() => handleModeChange('webgpu')}
               disabled={isRecording || isTranscribing}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 2L3 6v8l7 4 7-4V6l-7-4zm0 2.5L14.5 7 10 9.5 5.5 7 10 4.5zm-5 5L9 10v6l-4-2.3V9.5zm10 0v4.2L11 16v-6l4-2.5z"/>
-              </svg>
-              <span>WebGPU (Navegador)</span>
-            </button>
+            >WebGPU</button>
           </div>
-          {mode === 'webgpu' ? (
+        )}
+
+        <div className="config-row">
+          <button
+            className="config-chip"
+            onClick={() => setIsLanguageSelectorOpen(true)}
+            disabled={isRecording || isTranscribing}
+          >
+            <span className="chip-label">Idioma</span>
+            <span className="chip-value">{currentLang?.name || inputLanguage}</span>
+          </button>
+
+          <button
+            className="config-chip"
+            onClick={() => setTask(task === 'transcribe' ? 'translate' : 'transcribe')}
+            disabled={isRecording || isTranscribing || inputLanguage === 'en'}
+          >
+            <span className="chip-label">Tarea</span>
+            <span className="chip-value">
+              {task === 'transcribe' ? 'Transcribir' : 'Traducir (EN)'}
+            </span>
+          </button>
+
+          {mode === 'webgpu' && (
             <button
-              className="model-info-button"
+              className="config-chip"
               onClick={() => setIsModelSelectorOpen(true)}
               disabled={isRecording || isTranscribing}
             >
-              Modelo IA: {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
-                <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
-              </svg>
+              <span className="chip-label">Modelo</span>
+              <span className="chip-value">{transcriptionService.getCurrentModelInfo().name}</span>
             </button>
-          ) : (
-            <p className="mode-info">
-              Servidor Python (Modelo Medium)
-            </p>
           )}
         </div>
-      ) : (
-        <div className="mode-toggle-container">
-          <button
-            className="model-info-button"
-            onClick={() => setIsModelSelectorOpen(true)}
-            disabled={isRecording || isTranscribing}
-          >
-            Modelo IA: {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{marginLeft: '0.5rem'}}>
-              <path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/>
-            </svg>
-          </button>
-        </div>
-      )}
 
-      <div className="language-selector-container">
-        <button
-          className="language-button"
-          onClick={() => setIsLanguageSelectorOpen(true)}
-          disabled={isRecording || isTranscribing}
-        >
-          <span>{getLanguageName(inputLanguage, 'input')}</span>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" style={{margin: '0 0.5rem'}}>
-            <path d="M10 15l-5-5h10l-5 5z"/>
-          </svg>
-          <span>{getLanguageName(outputLanguage, 'output')}</span>
-        </button>
-      </div>
-
-      <div className="visualizer">
-        <div className="waveform">
-          {[...Array(24)].map((_, i) => (
-            <div
-              key={i}
-              className="bar"
-              style={{
-                height: isRecording && !isPaused
-                  ? `${Math.random() * audioLevel * 2.5 + 15}%`
-                  : '15%',
-                animationDelay: `${i * 0.04}s`
-              }}
-            />
-          ))}
-        </div>
-        {isRecording && (
-          <div className="recording-indicator">
-            <span className="pulse-dot"></span>
-            <span className="recording-text">{isPaused ? 'Pausado' : 'Grabando'}</span>
-            <span className="timer">{formatTime(recordingTime)}</span>
+        {/* Timestamps toggle */}
+        <div className="toggle-row">
+          <div className="toggle-info">
+            <span className="toggle-label">Timestamps</span>
+            <span className="toggle-desc">Marcas de tiempo en la transcripcion</span>
           </div>
-        )}
+          <label className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={enableTimestamps}
+              onChange={(e) => setEnableTimestamps(e.target.checked)}
+              disabled={isRecording || isTranscribing}
+            />
+            <span className="toggle-track"></span>
+          </label>
+        </div>
       </div>
 
-      <div className="controls">
-        <button
-          className={`control-btn record-btn ${isRecording ? 'active' : ''}`}
-          onClick={startRecording}
-          disabled={isRecording}
-        >
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
-            <circle cx="14" cy="14" r="10" />
-          </svg>
-          <span>Grabar</span>
-        </button>
-
-        <button
-          className={`control-btn pause-btn ${isPaused ? 'active' : ''}`}
-          onClick={pauseRecording}
-          disabled={!isRecording}
-        >
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
-            {isPaused ? (
-              <path d="M9 7l14 7-14 7z" />
-            ) : (
-              <>
-                <rect x="9" y="7" width="3.5" height="14" rx="1.5" />
-                <rect x="15.5" y="7" width="3.5" height="14" rx="1.5" />
-              </>
-            )}
-          </svg>
-          <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
-        </button>
-
-        <button
-          className="control-btn stop-btn"
-          onClick={stopRecording}
-          disabled={!isRecording}
-        >
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="currentColor">
-            <rect x="9" y="9" width="10" height="10" rx="2" />
-          </svg>
-          <span>Detener</span>
-        </button>
-
-        <button
-          className="control-btn cancel-btn"
-          onClick={cancelRecording}
-          disabled={!isRecording}
-        >
-          <svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="9" y1="9" x2="19" y2="19" />
-            <line x1="19" y1="9" x2="9" y2="19" />
-          </svg>
-          <span>Cancelar</span>
-        </button>
-      </div>
-
-      {renderTranscriptionResult()}
-    </>
-  );
-
-  const renderUploadSection = () => (
-    <>
-      <div className="section-header">
-        <h2>Subir Audio</h2>
-        <p>Sube un archivo de audio para transcribir</p>
-      </div>
-
-      <div className="language-selector-container">
-        <button
-          className="language-button"
-          onClick={() => setIsLanguageSelectorOpen(true)}
-          disabled={isTranscribing}
-        >
-          <span>{getLanguageName(inputLanguage, 'input')}</span>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" style={{margin: '0 0.5rem'}}>
-            <path d="M10 15l-5-5h10l-5 5z"/>
-          </svg>
-          <span>{getLanguageName(outputLanguage, 'output')}</span>
-        </button>
-      </div>
-
+      {/* Upload zone */}
       <div
-        className={`upload-zone ${isDragging ? 'dragging' : ''} ${uploadedFile ? 'has-file' : ''}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        onClick={() => fileInputRef.current?.click()}
+        className={`upload-area ${isDragging ? 'drag' : ''} ${uploadedFile ? 'has-file' : ''}`}
+        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+        onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
+        onDrop={(e) => { e.preventDefault(); setIsDragging(false); if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]); }}
+        onClick={() => !uploadedFile && fileInputRef.current?.click()}
       >
         <input
           ref={fileInputRef}
@@ -817,198 +988,485 @@ function App() {
           onChange={handleFileSelect}
           style={{ display: 'none' }}
         />
-
         {uploadedFile ? (
-          <div className="uploaded-file-info">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M9 18V5l12-2v13"/>
-              <circle cx="6" cy="18" r="3"/>
-              <circle cx="18" cy="16" r="3"/>
+          <div className="file-info">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
             </svg>
-            <p className="file-name">{uploadedFile.name}</p>
-            <p className="file-size">{(uploadedFile.size / (1024 * 1024)).toFixed(2)} MB</p>
+            <span className="file-name">{uploadedFile.name}</span>
+            <span className="file-size">{(uploadedFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+            <div className="file-actions">
+              <button className="btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); transcribeUploadedFile(); }} disabled={isTranscribing}>
+                Transcribir
+              </button>
+              <button className="btn-sm btn-ghost" onClick={(e) => { e.stopPropagation(); setUploadedFile(null); setRecordedAudioUrl(null); setAudioBufferData(null); }}>
+                Quitar
+              </button>
+            </div>
           </div>
         ) : (
-          <>
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-              <polyline points="17 8 12 3 7 8" />
-              <line x1="12" y1="3" x2="12" y2="15" />
+          <div className="upload-placeholder">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
-            <p>Arrastra un archivo de audio aquí</p>
-            <p className="upload-hint">o haz clic para seleccionar</p>
-            <p className="upload-formats">WAV, MP3, M4A, OGG, WebM</p>
-          </>
+            <span>Arrastra un archivo de audio o haz clic</span>
+            <span className="upload-formats">WAV, MP3, M4A, OGG, WebM</span>
+          </div>
         )}
       </div>
 
-      {uploadedFile && (
-        <div className="upload-actions">
-          <button
-            className="action-btn transcribe-btn"
-            onClick={transcribeUploadedFile}
-            disabled={isTranscribing}
-          >
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-              <path d="M10 3.75a.75.75 0 00-1.264-.546L5.203 6H2.667a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75h2.536l3.533 2.796A.75.75 0 0010 16.25V3.75z"/>
-            </svg>
-            Transcribir
+      {/* Recorder */}
+      <div className="recorder-section">
+        <div className="viz-container">
+          {renderWaveform(audioLevel, isRecording && !isPaused)}
+          {isRecording && (
+            <div className="rec-status">
+              <span className={`rec-dot ${isPaused ? 'paused' : ''}`}></span>
+              <span className="rec-label">{isPaused ? 'Pausado' : 'Grabando'}</span>
+              <span className="rec-time">{formatTime(recordingTime)}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="rec-controls">
+          <button className="ctrl-btn rec" onClick={startRecording} disabled={isRecording || isTranscribing}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+            <span>Grabar</span>
           </button>
+          <button className="ctrl-btn pause" onClick={pauseRecording} disabled={!isRecording}>
+            {isPaused ? (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="7" y="5" width="3" height="14" rx="1.5"/><rect x="14" y="5" width="3" height="14" rx="1.5"/>
+              </svg>
+            )}
+            <span>{isPaused ? 'Reanudar' : 'Pausar'}</span>
+          </button>
+          <button className="ctrl-btn stop" onClick={stopRecording} disabled={!isRecording}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+            <span>Detener</span>
+          </button>
+          <button className="ctrl-btn cancel" onClick={cancelRecording} disabled={!isRecording}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="8" y1="8" x2="16" y2="16"/><line x1="16" y1="8" x2="8" y2="16"/>
+            </svg>
+            <span>Cancelar</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Waveform visualization + Audio player */}
+      {recordedAudioUrl && !isRecording && (
+        <div className="audio-player-card">
+          <h3>Audio</h3>
+          {audioBufferData && (
+            <div className="waveform-canvas-container">
+              <canvas ref={waveformCanvasRef} className="waveform-canvas" />
+              <span className="waveform-canvas-label">Waveform</span>
+            </div>
+          )}
+          <audio ref={audioPlayerRef} controls src={recordedAudioUrl} className="audio-player" />
+          {audioBufferData && audioDuration > 0 && !isTrimming && (
+            <button
+              className="btn-sm btn-ghost full-w"
+              style={{ marginTop: '0.5rem' }}
+              onClick={() => {
+                setTrimStart(0);
+                setTrimEnd(audioDuration);
+                setIsTrimming(true);
+              }}
+              disabled={isTranscribing}
+            >
+              Recortar audio
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Audio Trimmer */}
+      {isTrimming && audioBufferData && (
+        <div className="trimmer-card">
+          <h3>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
+              <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
+            </svg>
+            Recortar
+          </h3>
+          <div className="trimmer-waveform-wrap">
+            <canvas ref={trimmerCanvasRef} className="trimmer-canvas" />
+            <div
+              className="trimmer-overlay"
+              style={{
+                left: `${(trimStart / audioDuration) * 100}%`,
+                width: `${((trimEnd - trimStart) / audioDuration) * 100}%`
+              }}
+            />
+            <div
+              className="trimmer-handle start"
+              style={{ left: `${(trimStart / audioDuration) * 100}%` }}
+              onMouseDown={(e) => handleTrimmerMouseDown(e, 'start')}
+              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('start'); }}
+            />
+            <div
+              className="trimmer-handle end"
+              style={{ left: `${(trimEnd / audioDuration) * 100}%` }}
+              onMouseDown={(e) => handleTrimmerMouseDown(e, 'end')}
+              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('end'); }}
+            />
+          </div>
+          <div className="trimmer-times">
+            <div className="trimmer-time">
+              <span className="trimmer-time-label">Inicio</span>
+              <span className="trimmer-time-value">{formatTimePrecise(trimStart)}</span>
+            </div>
+            <div className="trimmer-duration">
+              Duracion: {formatTimePrecise(trimEnd - trimStart)}
+            </div>
+            <div className="trimmer-time">
+              <span className="trimmer-time-label">Fin</span>
+              <span className="trimmer-time-value">{formatTimePrecise(trimEnd)}</span>
+            </div>
+          </div>
+          <div className="trimmer-actions">
+            <button className="btn-sm btn-primary" onClick={() => trimAndUseAudio('transcribe')} disabled={isTranscribing}>
+              Transcribir recorte
+            </button>
+            <button className="btn-sm btn-ghost" onClick={() => trimAndUseAudio('download')}>
+              Descargar recorte
+            </button>
+            <button className="btn-sm btn-ghost" onClick={() => setIsTrimming(false)}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Transcription result */}
+      {isTranscribing && (
+        <div className="processing-card">
+          <div className="spinner-container">
+            <div className="spinner"></div>
+          </div>
+          <p className="processing-text">Procesando audio con IA...</p>
+          <p className="processing-sub">
+            {modelLoadProgress !== null
+              ? `Cargando modelo: ${modelLoadProgress}%`
+              : 'Esto puede tardar unos segundos'}
+          </p>
+          {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
+            <p className="processing-note">
+              Primera vez: descargando modelo {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
+            </p>
+          )}
+        </div>
+      )}
+
+      {transcription && !isTranscribing && (
+        <div className="result-card">
+          <div className="result-header">
+            <h3>{task === 'translate' ? 'Traduccion (EN)' : 'Transcripcion'}</h3>
+            <div className="result-badges">
+              <span className="result-badge">{mode === 'backend' ? 'Backend' : 'WebGPU'}</span>
+              {detectedLanguage && (
+                <span className="result-badge lang">
+                  {detectedLanguage.toUpperCase()}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Show timestamps or plain text */}
+          {enableTimestamps && (transcriptionSegments || transcriptionChunks) ? (
+            renderTimestampResult()
+          ) : (
+            <div className="result-text">{transcription}</div>
+          )}
+
+          <div className="result-actions">
+            <button
+              className={`btn-sm btn-primary ${copied ? 'copied' : ''}`}
+              onClick={() => {
+                navigator.clipboard.writeText(transcription);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+            >
+              {copied ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const renderRecorderTab = () => (
+    <div className="tab-content">
+      <div className="section-intro">
+        <h2>Grabadora de Audio</h2>
+        <p>Graba audio, ajusta la velocidad y descargalo</p>
+      </div>
+
+      <div className="recorder-section">
+        <div className="viz-container">
+          {renderWaveform(toolAudioLevel, toolIsRecording && !toolIsPaused)}
+          {toolIsRecording && (
+            <div className="rec-status">
+              <span className={`rec-dot ${toolIsPaused ? 'paused' : ''}`}></span>
+              <span className="rec-label">{toolIsPaused ? 'Pausado' : 'Grabando'}</span>
+              <span className="rec-time">{formatTime(toolRecordingTime)}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="rec-controls">
+          <button className="ctrl-btn rec" onClick={toolStartRecording} disabled={toolIsRecording}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+            <span>Grabar</span>
+          </button>
+          <button className="ctrl-btn pause" onClick={toolPauseRecording} disabled={!toolIsRecording}>
+            {toolIsPaused ? (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            ) : (
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+                <rect x="7" y="5" width="3" height="14" rx="1.5"/><rect x="14" y="5" width="3" height="14" rx="1.5"/>
+              </svg>
+            )}
+            <span>{toolIsPaused ? 'Reanudar' : 'Pausar'}</span>
+          </button>
+          <button className="ctrl-btn stop" onClick={toolStopRecording} disabled={!toolIsRecording}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+            <span>Detener</span>
+          </button>
+          <button className="ctrl-btn cancel" onClick={toolCancelRecording} disabled={!toolIsRecording}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+              <line x1="8" y1="8" x2="16" y2="16"/><line x1="16" y1="8" x2="8" y2="16"/>
+            </svg>
+            <span>Cancelar</span>
+          </button>
+        </div>
+      </div>
+
+      {toolAudioUrl && !toolIsRecording && (
+        <div className="audio-tool-card">
+          <h3>Reproducir</h3>
+          {toolAudioBufferData && (
+            <div className="waveform-canvas-container">
+              <canvas ref={toolWaveformCanvasRef} className="waveform-canvas" />
+              <span className="waveform-canvas-label">Waveform</span>
+            </div>
+          )}
+          <audio
+            ref={toolAudioPlayerRef}
+            controls
+            src={toolAudioUrl}
+            className="audio-player"
+          />
+
+          <div className="speed-control">
+            <div className="speed-header">
+              <label>Velocidad de descarga</label>
+              <span className="speed-value">{toolSpeed.toFixed(2)}x</span>
+            </div>
+            <input
+              type="range"
+              min="0.25"
+              max="3.0"
+              step="0.05"
+              value={toolSpeed}
+              onChange={(e) => setToolSpeed(parseFloat(e.target.value))}
+              className="speed-slider"
+            />
+            <div className="speed-marks">
+              <span>0.25x</span>
+              <span>1x</span>
+              <span>2x</span>
+              <span>3x</span>
+            </div>
+            <div className="speed-presets">
+              {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map(s => (
+                <button
+                  key={s}
+                  className={`speed-preset ${toolSpeed === s ? 'sel' : ''}`}
+                  onClick={() => setToolSpeed(s)}
+                >
+                  {s}x
+                </button>
+              ))}
+            </div>
+          </div>
+
           <button
-            className="action-btn cancel-upload-btn"
-            onClick={() => setUploadedFile(null)}
+            className="btn-download"
+            onClick={downloadAudioWithSpeed}
+            disabled={isProcessingDownload}
           >
-            Cancelar
+            {isProcessingDownload ? (
+              <>
+                <div className="spinner-sm"></div>
+                <span>Procesando...</span>
+              </>
+            ) : (
+              <>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                <span>Descargar WAV {toolSpeed !== 1.0 ? `(${toolSpeed}x)` : ''}</span>
+              </>
+            )}
           </button>
         </div>
       )}
 
-      {renderTranscriptionResult()}
-    </>
+      {!toolAudioUrl && !toolIsRecording && (
+        <div className="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+            <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <p>Pulsa Grabar para empezar</p>
+          <p className="hint">Podras ajustar la velocidad y descargar el audio</p>
+        </div>
+      )}
+    </div>
   );
 
-  const renderHistorySection = () => (
-    <>
-      <div className="section-header">
+  const renderHistoryTab = () => (
+    <div className="tab-content">
+      <div className="section-intro">
         <h2>Historial</h2>
         <p>{history.length} transcripcion{history.length !== 1 ? 'es' : ''}</p>
       </div>
 
       {history.length > 0 && (
-        <button className="clear-history-btn" onClick={clearHistory}>
+        <button className="btn-clear-history" onClick={clearHistory}>
           Limpiar historial
         </button>
       )}
 
-      <div className="history-list">
-        {history.length === 0 ? (
-          <div className="history-empty">
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
-            <p>No hay transcripciones guardadas</p>
-            <p className="history-hint">Las transcripciones aparecerán aquí</p>
-          </div>
-        ) : (
-          history.map((entry) => (
-            <div key={entry.id} className="history-item">
-              <div className="history-item-header">
+      {history.length === 0 ? (
+        <div className="empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <p>No hay transcripciones guardadas</p>
+          <p className="hint">Las transcripciones apareceran aqui</p>
+        </div>
+      ) : (
+        <div className="history-list">
+          {history.map(entry => (
+            <div key={entry.id} className="history-card">
+              <div className="history-meta">
                 <span className="history-date">{formatDate(entry.timestamp)}</span>
-                <span className="history-source">
-                  {entry.source === 'recording' ? 'Grabación' : entry.source}
-                </span>
-                <button
-                  className="history-delete"
-                  onClick={() => deleteHistoryEntry(entry.id)}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
+                <span className="history-badge">{entry.task === 'translate' ? 'Traduccion' : entry.inputLanguage === 'auto' ? 'Auto' : entry.inputLanguage?.toUpperCase()}</span>
+                <span className="history-badge secondary">{entry.method}</span>
+                {entry.detectedLanguage && (
+                  <span className="history-badge secondary">{entry.detectedLanguage}</span>
+                )}
+                <button className="history-del" onClick={() => deleteHistoryEntry(entry.id)}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                   </svg>
                 </button>
               </div>
-              <div className="history-item-languages">
-                {getLanguageName(entry.inputLanguage, 'input')}
-                {entry.translatedText && (
-                  <>
-                    <span className="arrow">→</span>
-                    {getLanguageName(entry.outputLanguage, 'output')}
-                  </>
-                )}
+              <div className="history-text">
+                {entry.transcription.substring(0, 200)}
+                {entry.transcription.length > 200 && '...'}
               </div>
-              <div className="history-item-text">
-                {entry.transcription.substring(0, 150)}
-                {entry.transcription.length > 150 && '...'}
-              </div>
-              <div className="history-item-actions">
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(entry.transcription);
-                  }}
-                >
+              <div className="history-actions">
+                <button className="btn-sm btn-ghost" onClick={() => {
+                  navigator.clipboard.writeText(entry.transcription);
+                }}>
                   Copiar
-                </button>
-                <button
-                  onClick={() => speakText(entry.transcription, entry.outputLanguage === 'same' ? entry.inputLanguage : entry.outputLanguage)}
-                >
-                  Escuchar
                 </button>
               </div>
             </div>
-          ))
-        )}
-      </div>
-    </>
+          ))}
+        </div>
+      )}
+    </div>
   );
 
-  const renderSettingsSection = () => (
-    <>
-      <div className="section-header">
+  const renderSettingsTab = () => (
+    <div className="tab-content">
+      <div className="section-intro">
         <h2>Ajustes</h2>
-        <p>Configuración y gestión de modelos</p>
+        <p>Configuracion y modelos</p>
       </div>
 
-      {/* WebGPU Support Status */}
+      {/* Theme */}
       <div className="settings-card">
-        <h3>Estado de WebGPU</h3>
-        <div className={`webgpu-status ${webGPUSupport.supported ? 'supported' : 'not-supported'}`}>
+        <h3>Tema</h3>
+        <div className="theme-options">
+          {[
+            { value: 'system', label: 'Sistema' },
+            { value: 'light', label: 'Claro' },
+            { value: 'dark', label: 'Oscuro' }
+          ].map(opt => (
+            <button
+              key={opt.value}
+              className={`theme-opt ${themePreference === opt.value ? 'sel' : ''}`}
+              onClick={() => setThemePreference(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-card">
+        <h3>WebGPU</h3>
+        <div className={`status-indicator ${webGPUSupport.supported ? 'ok' : 'err'}`}>
           {webGPUSupport.supported === null ? (
             <span>Verificando...</span>
           ) : webGPUSupport.supported ? (
             <>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-                <polyline points="22 4 12 14.01 9 11.01"/>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
               </svg>
               <span>WebGPU disponible</span>
             </>
           ) : (
             <>
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10"/>
-                <line x1="15" y1="9" x2="9" y2="15"/>
-                <line x1="9" y1="9" x2="15" y2="15"/>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
               </svg>
-              <span>WebGPU no disponible</span>
-              <p className="webgpu-reason">{webGPUSupport.reason}</p>
+              <span>No disponible</span>
+              {webGPUSupport.reason && <p className="status-reason">{webGPUSupport.reason}</p>}
             </>
           )}
         </div>
       </div>
 
-      {/* Cached Models */}
       <div className="settings-card">
-        <div className="settings-card-header">
-          <h3>Modelos Cacheados</h3>
-          <span className="cache-total">{totalCacheSize.formatted}</span>
+        <div className="settings-card-top">
+          <h3>Modelos en cache</h3>
+          <span className="cache-badge">{totalCacheSize.formatted}</span>
         </div>
 
         {isLoadingCache ? (
-          <div className="loading-cache">
-            <div className="spinner"></div>
-            <span>Cargando...</span>
-          </div>
+          <div className="loading-inline"><div className="spinner-sm"></div><span>Cargando...</span></div>
         ) : cachedModels.length === 0 ? (
-          <div className="no-models">
+          <div className="empty-inline">
             <p>No hay modelos cacheados</p>
-            <p className="hint">Los modelos se cachean automáticamente al usarlos</p>
+            <p className="hint">Se cachean automaticamente al usarlos</p>
           </div>
         ) : (
-          <div className="cached-models-list">
-            {cachedModels.map((model) => (
-              <div key={model.name} className="cached-model-item">
-                <div className="model-info">
-                  <span className="model-display-name">{model.displayName}</span>
-                  <span className="model-size-info">{model.sizeFormatted}</span>
+          <div className="model-list">
+            {cachedModels.map(model => (
+              <div key={model.name} className="model-item">
+                <div>
+                  <span className="model-display">{model.displayName}</span>
+                  <span className="model-size">{model.sizeFormatted}</span>
                 </div>
-                <button
-                  className="delete-model-btn"
-                  onClick={() => handleDeleteModel(model.name)}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <button className="btn-icon danger" onClick={() => handleDeleteModel(model.name)}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <polyline points="3 6 5 6 21 6"/>
-                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
                   </svg>
                 </button>
               </div>
@@ -1017,270 +1475,140 @@ function App() {
         )}
 
         {cachedModels.length > 0 && (
-          <button className="clear-all-cache-btn" onClick={handleClearAllCache}>
+          <button className="btn-sm btn-danger full-w" onClick={handleClearAllCache}>
             Eliminar todos los modelos
           </button>
         )}
-
-        <button className="refresh-cache-btn" onClick={loadCachedModels}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="23 4 23 10 17 10"/>
-            <polyline points="1 20 1 14 7 14"/>
-            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
+        <button className="btn-sm btn-ghost full-w" onClick={loadCachedModels} style={{marginTop: '0.5rem'}}>
           Actualizar
         </button>
       </div>
 
-      {/* About */}
       <div className="settings-card">
         <h3>Acerca de</h3>
-        <div className="about-info">
+        <div className="about-block">
           <p><strong>Transcript X</strong></p>
-          <p>Transcripción de voz con IA</p>
-          <p className="version">Versión 1.0</p>
+          <p>Transcripcion de voz offline con IA</p>
+          <p className="hint">Version 2.1</p>
         </div>
       </div>
-    </>
+    </div>
   );
 
-  const renderTranscriptionResult = () => {
-    if (isTranscribing) {
-      return (
-        <div className="loading-container">
-          <div className="loading-spinner">
-            <div className="spinner-ring"></div>
-            <div className="spinner-ring"></div>
-            <div className="spinner-ring"></div>
-          </div>
-          <p className="loading-text">Procesando audio con IA...</p>
-          <p className="loading-subtext">
-            {modelLoadProgress !== null
-              ? `Cargando modelo: ${modelLoadProgress}%`
-              : 'Esto puede tardar unos segundos'}
-          </p>
-          {mode === 'webgpu' && !transcriptionService.isModelLoaded() && (
-            <p className="loading-note">
-              Primera vez: descargando modelo IA {transcriptionService.getCurrentModelInfo().name} ({transcriptionService.getCurrentModelInfo().size})
-            </p>
-          )}
-        </div>
-      );
-    }
-
-    if (transcription) {
-      return (
-        <div className="transcription-container">
-          {translatedText ? (
-            <>
-              <div className="transcription-header">
-                <h2>{getLanguageName(inputLanguage, 'input')} (Original)</h2>
-              </div>
-              <div className="transcription-box">
-                {originalText}
-              </div>
-              <div className="transcription-header" style={{marginTop: '1rem'}}>
-                <h2>{getLanguageName(outputLanguage, 'output')} (Traducción)</h2>
-              </div>
-              <div className="transcription-box">
-                {translatedText}
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="transcription-header">
-                <h2>Transcripción</h2>
-              </div>
-              <div className="transcription-box">
-                {transcription}
-              </div>
-            </>
-          )}
-          <div className="action-buttons-wrapper">
-            <button
-              className={`action-btn speak-btn ${isSpeaking ? 'speaking' : ''}`}
-              onClick={() => speakText()}
-              disabled={isSpeaking}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M10 3.75a.75.75 0 00-1.264-.546L5.203 6H2.667a.75.75 0 00-.75.75v6.5c0 .414.336.75.75.75h2.536l3.533 2.796A.75.75 0 0010 16.25V3.75zM13.5 10a2.25 2.25 0 00-1.313-2.047.75.75 0 11.626-1.366A3.75 3.75 0 0115 10a3.75 3.75 0 01-2.187 3.413.75.75 0 11-.626-1.366A2.25 2.25 0 0013.5 10z"/>
-                <path d="M14.437 5.438a.75.75 0 011.125.976 6.711 6.711 0 010 7.172.75.75 0 11-1.125-.976 5.211 5.211 0 000-5.57.75.75 0 010-.602z"/>
-              </svg>
-              <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                <span>{isSpeaking ? 'Reproduciendo...' : 'Escuchar'}</span>
-                {isSpeaking && ttsMethod && (
-                  <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>
-                    {ttsMethod === 'api' ? 'Voz natural (API)' : 'Voz local'}
-                  </span>
-                )}
-              </span>
-            </button>
-
-            {isSpeaking && (
-              <button
-                className="action-btn stop-speak-btn"
-                onClick={stopSpeech}
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                  <rect x="6" y="6" width="8" height="8" rx="1.5" />
-                </svg>
-                Detener
-              </button>
-            )}
-
-            <button
-              className={`action-btn copy-btn ${copied ? 'copied' : ''}`}
-              onClick={() => {
-                const textToCopy = translatedText || transcription;
-                navigator.clipboard.writeText(textToCopy);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor">
-                {copied ? (
-                  <path d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" />
-                ) : (
-                  <>
-                    <path d="M8 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" />
-                    <path d="M6 3a2 2 0 00-2 2v11a2 2 0 002 2h8a2 2 0 002-2V5a2 2 0 00-2-2 3 3 0 01-3 3H9a3 3 0 01-3-3z" />
-                  </>
-                )}
-              </svg>
-              {copied ? '¡Copiado!' : 'Copiar'}
-            </button>
-          </div>
-        </div>
-      );
-    }
-
-    return null;
-  };
-
   return (
-    <div className="app">
-      <div className="container">
-        <div className="header">
-          <div className="logo">
-            <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
-              <circle cx="28" cy="28" r="26" stroke="url(#gradient)" strokeWidth="2.5" opacity="0.3" />
-              <circle cx="28" cy="28" r="22" stroke="url(#gradient)" strokeWidth="3" />
-              <path d="M28 14v28M22 20v16M34 20v16M16 24v8M40 24v8"
-                    stroke="url(#gradient)"
-                    strokeWidth="3"
-                    strokeLinecap="round" />
-              <defs>
-                <linearGradient id="gradient" x1="0" y1="0" x2="56" y2="56">
-                  <stop offset="0%" stopColor="#6366f1" />
-                  <stop offset="50%" stopColor="#8b5cf6" />
-                  <stop offset="100%" stopColor="#ec4899" />
-                </linearGradient>
-              </defs>
+    <div className="app-shell">
+      {/* Header */}
+      <header className="app-header">
+        <div className="app-logo">
+          <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+            <rect width="28" height="28" rx="8" fill="url(#hg)"/>
+            <path d="M14 6v16M10 9v10M18 9v10M7 12v4M21 12v4" stroke="#fff" strokeWidth="2" strokeLinecap="round"/>
+            <defs>
+              <linearGradient id="hg" x1="0" y1="0" x2="28" y2="28">
+                <stop offset="0%" stopColor="#06b6d4"/>
+                <stop offset="100%" stopColor="#0891b2"/>
+              </linearGradient>
+            </defs>
+          </svg>
+          <span>Transcript X</span>
+        </div>
+        <button className="theme-toggle" onClick={cycleTheme} title={activeTheme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}>
+          {activeTheme === 'dark' ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
             </svg>
-          </div>
-          <h1>Transcript X</h1>
-          <p className="subtitle">Transcripción de voz</p>
-        </div>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+            </svg>
+          )}
+        </button>
+      </header>
 
-        <div className="section-content">
-          {activeSection === 'record' && renderRecordSection()}
-          {activeSection === 'upload' && renderUploadSection()}
-          {activeSection === 'history' && renderHistorySection()}
-          {activeSection === 'settings' && renderSettingsSection()}
-        </div>
+      {/* Main content */}
+      <main className="app-main">
+        {activeTab === 'transcribe' && renderTranscribeTab()}
+        {activeTab === 'recorder' && renderRecorderTab()}
+        {activeTab === 'history' && renderHistoryTab()}
+        {activeTab === 'settings' && renderSettingsTab()}
+      </main>
 
-        {/* Bottom Navigation */}
-        <nav className="bottom-nav">
+      {/* Bottom nav */}
+      <nav className="app-nav">
+        {[
+          { id: 'transcribe', label: 'Transcribir', icon: (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+              <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          )},
+          { id: 'recorder', label: 'Grabadora', icon: (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <circle cx="12" cy="12" r="3" fill="currentColor"/>
+            </svg>
+          )},
+          { id: 'history', label: 'Historial', icon: (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          )},
+          { id: 'settings', label: 'Ajustes', icon: (
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+            </svg>
+          )},
+        ].map(tab => (
           <button
-            className={`nav-item ${activeSection === 'record' ? 'active' : ''}`}
-            onClick={() => setActiveSection('record')}
+            key={tab.id}
+            className={`nav-tab ${activeTab === tab.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(tab.id)}
           >
-            <NavIcon type="record" />
-            <span>Grabar</span>
+            {tab.icon}
+            <span>{tab.label}</span>
           </button>
-          <button
-            className={`nav-item ${activeSection === 'upload' ? 'active' : ''}`}
-            onClick={() => setActiveSection('upload')}
-          >
-            <NavIcon type="upload" />
-            <span>Subir</span>
-          </button>
-          <button
-            className={`nav-item ${activeSection === 'history' ? 'active' : ''}`}
-            onClick={() => setActiveSection('history')}
-          >
-            <NavIcon type="history" />
-            <span>Historial</span>
-          </button>
-          <button
-            className={`nav-item ${activeSection === 'settings' ? 'active' : ''}`}
-            onClick={() => setActiveSection('settings')}
-          >
-            <NavIcon type="settings" />
-            <span>Ajustes</span>
-          </button>
-        </nav>
-      </div>
+        ))}
+      </nav>
 
       {/* Model Selector Modal */}
       {isModelSelectorOpen && (
-        <div className="modal-overlay" onClick={() => setIsModelSelectorOpen(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
+        <div className="modal-backdrop" onClick={() => setIsModelSelectorOpen(false)}>
+          <div className="modal-box" onClick={e => e.stopPropagation()}>
+            <div className="modal-top">
               <h3>Seleccionar Modelo</h3>
-              <button
-                className="modal-close"
-                onClick={() => setIsModelSelectorOpen(false)}
-              >
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
+              <button className="modal-x" onClick={() => setIsModelSelectorOpen(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
             </div>
             <div className="modal-body">
-              <div className={`model-options ${transcriptionService.isMobileDevice() ? 'mobile' : ''}`}>
+              <div className="model-grid">
                 {!transcriptionService.isMobileDevice() && (
                   <button
-                    className={`model-option ${selectedModel === 'auto' ? 'active' : ''}`}
+                    className={`model-card ${selectedModel === 'auto' ? 'sel' : ''}`}
                     onClick={() => handleModelChange('auto')}
                   >
-                    <span className="model-name">Auto</span>
-                    <span className="model-size">{getModelInfo('auto').size}</span>
+                    <span className="mc-name">Auto</span>
+                    <span className="mc-size">{transcriptionService.isMobileDevice() ? '~40 MB' : '~150 MB'}</span>
                   </button>
                 )}
-                <button
-                  className={`model-option ${selectedModel === 'tiny' ? 'active' : ''}`}
-                  onClick={() => handleModelChange('tiny')}
-                >
-                  <span className="model-name">Tiny</span>
-                  <span className="model-size">~40 MB</span>
+                <button className={`model-card ${selectedModel === 'tiny' ? 'sel' : ''}`} onClick={() => handleModelChange('tiny')}>
+                  <span className="mc-name">Tiny</span><span className="mc-size">~40 MB</span>
                 </button>
-                <button
-                  className={`model-option ${selectedModel === 'base' ? 'active' : ''}`}
-                  onClick={() => handleModelChange('base')}
-                >
-                  <span className="model-name">Base</span>
-                  <span className="model-size">~75 MB</span>
+                <button className={`model-card ${selectedModel === 'base' ? 'sel' : ''}`} onClick={() => handleModelChange('base')}>
+                  <span className="mc-name">Base</span><span className="mc-size">~75 MB</span>
                 </button>
-                <button
-                  className={`model-option ${selectedModel === 'small' ? 'active' : ''} ${transcriptionService.isSmallModelRisky() ? 'warning' : ''}`}
-                  onClick={() => handleModelChange('small')}
-                >
-                  <span className="model-name">Small</span>
-                  <span className="model-size">~150 MB</span>
-                  {transcriptionService.isSmallModelRisky() && (
-                    <span className="model-warning">Requiere 4GB+ RAM</span>
-                  )}
+                <button className={`model-card ${selectedModel === 'small' ? 'sel' : ''} ${transcriptionService.isSmallModelRisky() ? 'warn' : ''}`} onClick={() => handleModelChange('small')}>
+                  <span className="mc-name">Small</span><span className="mc-size">~150 MB</span>
+                  {transcriptionService.isSmallModelRisky() && <span className="mc-warn">4GB+ RAM</span>}
                 </button>
               </div>
-              <p className="model-desc">{getModelInfo(selectedModel).desc}</p>
-              {selectedModel === 'small' && transcriptionService.isSmallModelRisky() && (
-                <p className="model-warning-text">
-                  Este modelo puede causar problemas en dispositivos con menos de 4GB de RAM.
-                  Si experimentas errores, usa Base o Tiny.
-                </p>
-              )}
             </div>
           </div>
         </div>
@@ -1288,57 +1616,41 @@ function App() {
 
       {/* Language Selector Modal */}
       {isLanguageSelectorOpen && (
-        <div className="modal-overlay" onClick={() => setIsLanguageSelectorOpen(false)}>
-          <div className="modal-content language-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Seleccionar Idiomas</h3>
-              <button
-                className="modal-close"
-                onClick={() => setIsLanguageSelectorOpen(false)}
-              >
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
+        <div className="modal-backdrop" onClick={() => setIsLanguageSelectorOpen(false)}>
+          <div className="modal-box modal-lang" onClick={e => e.stopPropagation()}>
+            <div className="modal-top">
+              <h3>Idioma del audio</h3>
+              <button className="modal-x" onClick={() => setIsLanguageSelectorOpen(false)}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
                 </svg>
               </button>
             </div>
             <div className="modal-body">
-              <div className="language-section">
-                <h4>Idioma de entrada (audio)</h4>
-                <div className="language-grid">
-                  {getInputLanguages().map((lang) => (
-                    <button
-                      key={lang.code}
-                      className={`language-option ${inputLanguage === lang.code ? 'active' : ''}`}
-                      onClick={() => setInputLanguage(lang.code)}
-                    >
-                      <span className="language-flag">{lang.flag}</span>
-                      <span className="language-name">{lang.name}</span>
-                    </button>
-                  ))}
-                </div>
+              <div className="lang-grid">
+                {languages.map(lang => (
+                  <button
+                    key={lang.code}
+                    className={`lang-opt ${inputLanguage === lang.code ? 'sel' : ''} ${lang.code === 'auto' ? 'auto-detect' : ''}`}
+                    onClick={() => {
+                      setInputLanguage(lang.code);
+                      if (lang.code === 'en') setTask('transcribe');
+                      setIsLanguageSelectorOpen(false);
+                    }}
+                  >
+                    <span className="lang-code">{lang.code === 'auto' ? 'AUTO' : lang.code.toUpperCase()}</span>
+                    <span className="lang-name">{lang.name}</span>
+                  </button>
+                ))}
               </div>
-              <div className="language-section">
-                <h4>Idioma de salida (transcripción)</h4>
-                <div className="language-grid">
-                  {getOutputLanguages().map((lang) => (
-                    <button
-                      key={lang.code}
-                      className={`language-option ${outputLanguage === lang.code ? 'active' : ''}`}
-                      onClick={() => setOutputLanguage(lang.code)}
-                    >
-                      <span className="language-flag">{lang.flag}</span>
-                      <span className="language-name">{lang.name}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="modal-hint">
+                &quot;Auto Detect&quot; permite a Whisper detectar el idioma automaticamente. Solo se traducira al ingles (tarea &quot;translate&quot; de Whisper). Todo funciona offline.
+              </p>
             </div>
           </div>
         </div>
       )}
 
-      {/* PWA Install Prompt */}
       <InstallPrompt />
     </div>
   );

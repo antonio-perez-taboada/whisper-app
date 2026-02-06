@@ -1,34 +1,12 @@
 #!/usr/bin/env python3
 import os
 import tempfile
-import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import whisper
 
 app = Flask(__name__)
 CORS(app)
-
-def translate_text(text, source_lang, target_lang):
-    """Translate text using MyMemory Translation API (free, no API key required)"""
-    try:
-        url = f"https://api.mymemory.translated.net/get"
-        params = {
-            'q': text,
-            'langpair': f'{source_lang}|{target_lang}'
-        }
-        response = requests.get(url, params=params, timeout=10)
-
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('responseStatus') == 200 or data.get('responseData'):
-                return data['responseData']['translatedText']
-
-        print(f"Translation failed, returning original text")
-        return text
-    except Exception as e:
-        print(f"Translation error: {str(e)}, returning original text")
-        return text
 
 print("Cargando modelo Whisper medium...")
 model = whisper.load_model("medium")
@@ -47,60 +25,61 @@ def transcribe():
         if 'audio' not in request.files:
             return jsonify({
                 'success': False,
-                'error': 'No se recibió archivo de audio'
+                'error': 'No se recibio archivo de audio'
             }), 400
 
         audio_file = request.files['audio']
-        input_language = request.form.get('inputLanguage', 'es')
-        output_language = request.form.get('outputLanguage', 'same')
+        input_language = request.form.get('inputLanguage', None)
+        task = request.form.get('task', 'transcribe')
+        timestamps = request.form.get('timestamps', 'false') == 'true'
+
+        # Only allow 'transcribe' or 'translate' (to English) - Whisper native tasks
+        if task not in ('transcribe', 'translate'):
+            task = 'transcribe'
 
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_audio:
             audio_file.save(temp_audio.name)
             temp_path = temp_audio.name
 
         print(f"Transcribiendo archivo: {temp_path}")
-        print(f"Idioma de entrada: {input_language}, Idioma de salida: {output_language}")
+        print(f"Idioma: {input_language or 'auto-detect'}, Tarea: {task}, Timestamps: {timestamps}")
 
-        # Determine task: 'translate' only translates to English in Whisper
-        task = 'translate' if (output_language == 'en' and output_language != input_language) else 'transcribe'
+        transcribe_options = {
+            'task': task,
+            'fp16': False,
+            'verbose': False
+        }
 
-        result = model.transcribe(
-            temp_path,
-            language=input_language,
-            task=task,
-            fp16=False,
-            verbose=False
-        )
+        # If language is provided, use it; otherwise let Whisper auto-detect
+        if input_language:
+            transcribe_options['language'] = input_language
+
+        result = model.transcribe(temp_path, **transcribe_options)
 
         os.unlink(temp_path)
 
-        original_text = result['text'].strip()
-        translated_text = None
-        final_transcription = original_text
-
-        # If output language is different from input and not 'same', translate the result
-        if output_language != 'same' and output_language != input_language:
-            # If task was 'translate' (to English), the result is already in English
-            if task == 'translate' and output_language != 'en':
-                # Need to translate from English to target language
-                print(f"Translating from English to {output_language}...")
-                translated_text = translate_text(original_text, 'en', output_language)
-                final_transcription = translated_text
-            elif task == 'transcribe':
-                # Need to translate from input language to output language
-                print(f"Translating from {input_language} to {output_language}...")
-                translated_text = translate_text(original_text, input_language, output_language)
-                final_transcription = translated_text
-
-        print(f"Transcripción ({task}): {final_transcription}")
+        transcription = result['text'].strip()
+        detected_language = result.get('language', None)
+        print(f"Resultado ({task}): {transcription}")
+        if detected_language:
+            print(f"Idioma detectado: {detected_language}")
 
         response_data = {
             'success': True,
-            'transcription': final_transcription,
-            'originalText': original_text,
-            'translatedText': translated_text,
-            'translated': translated_text is not None
+            'transcription': transcription,
+            'detected_language': detected_language
         }
+
+        # Include segments with timestamps if requested
+        if timestamps and 'segments' in result:
+            response_data['segments'] = [
+                {
+                    'start': seg['start'],
+                    'end': seg['end'],
+                    'text': seg['text'].strip()
+                }
+                for seg in result['segments']
+            ]
 
         return jsonify(response_data)
 
@@ -112,5 +91,5 @@ def transcribe():
         }), 500
 
 if __name__ == '__main__':
-    print("🎤 Servidor Whisper Python corriendo en http://localhost:5001")
+    print("Servidor Whisper Python corriendo en http://localhost:5001")
     app.run(host='0.0.0.0', port=5001, debug=False)

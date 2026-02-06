@@ -1,29 +1,28 @@
 .install-prompt {
   position: fixed;
-  bottom: 0;
+  bottom: 4.5rem;
   left: 0;
   right: 0;
-  z-index: 1000;
+  z-index: 60;
   padding: 1rem;
   animation: slideUpPrompt 0.3s ease-out;
-}
-
-.install-prompt-content {
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.95) 0%, rgba(139, 92, 246, 0.95) 100%);
-  border-radius: 16px;
-  padding: 1rem 1.25rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3),
-              0 0 0 1px rgba(255, 255, 255, 0.1) inset;
-  backdrop-filter: blur(10px);
-  max-width: 600px;
+  max-width: 520px;
   margin: 0 auto;
 }
 
+.install-prompt-content {
+  background: var(--surface, #18181b);
+  border: 1px solid var(--accent-border, rgba(6, 182, 212, 0.2));
+  border-radius: 12px;
+  padding: 0.875rem 1.125rem;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
 .install-prompt-icon {
-  font-size: 2rem;
+  font-size: 1.75rem;
   line-height: 1;
   flex-shrink: 0;
 }
@@ -34,16 +33,16 @@
 }
 
 .install-prompt-text h3 {
-  margin: 0 0 0.25rem 0;
-  font-size: 0.9375rem;
+  margin: 0 0 0.125rem 0;
+  font-size: 0.875rem;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--text, #fafafa);
 }
 
 .install-prompt-text p {
   margin: 0;
-  font-size: 0.8125rem;
-  color: rgba(255, 255, 255, 0.85);
+  font-size: 0.75rem;
+  color: var(--text-3, #71717a);
   line-height: 1.3;
 }
 
@@ -57,23 +56,22 @@
 .install-prompt-btn {
   border: none;
   cursor: pointer;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font, -apple-system, BlinkMacSystemFont, sans-serif);
   font-weight: 600;
   transition: all 0.2s ease;
   border-radius: 8px;
 }
 
 .install-prompt-btn.install {
-  background: rgba(255, 255, 255, 0.95);
-  color: #6366f1;
-  padding: 0.625rem 1.25rem;
-  font-size: 0.875rem;
+  background: var(--accent, #06b6d4);
+  color: var(--bg, #09090b);
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
 }
 
 .install-prompt-btn.install:hover {
-  background: #ffffff;
+  background: var(--accent-2, #22d3ee);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .install-prompt-btn.install:active {
@@ -81,19 +79,20 @@
 }
 
 .install-prompt-btn.dismiss {
-  background: rgba(255, 255, 255, 0.15);
-  color: rgba(255, 255, 255, 0.9);
-  padding: 0.5rem;
-  font-size: 1rem;
-  width: 32px;
-  height: 32px;
+  background: var(--surface-2, #27272a);
+  color: var(--text-3, #71717a);
+  padding: 0.375rem;
+  font-size: 0.875rem;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .install-prompt-btn.dismiss:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--surface-3, #3f3f46);
+  color: var(--text-2, #a1a1aa);
 }
 
 @keyframes slideUpPrompt {
@@ -107,30 +106,14 @@
   }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 520px) {
   .install-prompt {
+    max-width: 100%;
     padding: 0.75rem;
   }
 
   .install-prompt-content {
-    padding: 0.875rem 1rem;
-    gap: 0.75rem;
-  }
-
-  .install-prompt-icon {
-    font-size: 1.75rem;
-  }
-
-  .install-prompt-text h3 {
-    font-size: 0.875rem;
-  }
-
-  .install-prompt-text p {
-    font-size: 0.75rem;
-  }
-
-  .install-prompt-btn.install {
-    padding: 0.5rem 1rem;
-    font-size: 0.8125rem;
+    padding: 0.75rem 0.875rem;
+    gap: 0.625rem;
   }
 }

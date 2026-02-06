@@ -3,22 +3,53 @@ import { env } from '@xenova/transformers';
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 
-// Reset worker after this many transcriptions to prevent memory leaks
 const MAX_TRANSCRIPTIONS_BEFORE_RESET = 5;
+
+// Whisper supported languages (subset for UI)
+const WHISPER_LANGUAGES = [
+  { code: 'auto', name: 'Auto Detect', whisper: null },
+  { code: 'es', name: 'Spanish', whisper: 'spanish' },
+  { code: 'en', name: 'English', whisper: 'english' },
+  { code: 'fr', name: 'French', whisper: 'french' },
+  { code: 'de', name: 'German', whisper: 'german' },
+  { code: 'it', name: 'Italian', whisper: 'italian' },
+  { code: 'pt', name: 'Portuguese', whisper: 'portuguese' },
+  { code: 'nl', name: 'Dutch', whisper: 'dutch' },
+  { code: 'pl', name: 'Polish', whisper: 'polish' },
+  { code: 'ru', name: 'Russian', whisper: 'russian' },
+  { code: 'zh', name: 'Chinese', whisper: 'chinese' },
+  { code: 'ja', name: 'Japanese', whisper: 'japanese' },
+  { code: 'ko', name: 'Korean', whisper: 'korean' },
+  { code: 'ar', name: 'Arabic', whisper: 'arabic' },
+  { code: 'hi', name: 'Hindi', whisper: 'hindi' },
+  { code: 'tr', name: 'Turkish', whisper: 'turkish' },
+  { code: 'sv', name: 'Swedish', whisper: 'swedish' },
+  { code: 'da', name: 'Danish', whisper: 'danish' },
+  { code: 'fi', name: 'Finnish', whisper: 'finnish' },
+  { code: 'no', name: 'Norwegian', whisper: 'norwegian' },
+  { code: 'uk', name: 'Ukrainian', whisper: 'ukrainian' },
+  { code: 'ca', name: 'Catalan', whisper: 'catalan' },
+  { code: 'vi', name: 'Vietnamese', whisper: 'vietnamese' },
+  { code: 'th', name: 'Thai', whisper: 'thai' },
+  { code: 'el', name: 'Greek', whisper: 'greek' },
+  { code: 'cs', name: 'Czech', whisper: 'czech' },
+  { code: 'ro', name: 'Romanian', whisper: 'romanian' },
+  { code: 'hu', name: 'Hungarian', whisper: 'hungarian' },
+  { code: 'he', name: 'Hebrew', whisper: 'hebrew' },
+  { code: 'id', name: 'Indonesian', whisper: 'indonesian' },
+  { code: 'ms', name: 'Malay', whisper: 'malay' },
+];
 
 class TranscriptionService {
   constructor() {
-    this.mode = 'webgpu'; // 'backend' or 'webgpu'
+    this.mode = 'webgpu';
     this.worker = null;
     this.modelLoading = false;
     this.modelLoaded = false;
     this.backendAvailable = false;
     this.modelName = null;
-    // Set default model: base for mobile, null (auto) for desktop
     this.selectedModel = this.isMobileDevice() ? 'Xenova/whisper-base' : null;
-    this.pendingCallbacks = new Map();
-    this.messageId = 0;
-    this.transcriptionCount = 0; // Track transcriptions for auto-reset
+    this.transcriptionCount = 0;
   }
 
   initWorker() {
@@ -68,53 +99,41 @@ class TranscriptionService {
     return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   }
 
-  // Get device memory in GB (returns undefined if not supported)
   getDeviceMemory() {
-    return navigator.deviceMemory; // Returns RAM in GB (Chrome/Edge only)
+    return navigator.deviceMemory;
   }
 
-  // Check if device has enough memory for Small model (4GB+ recommended)
   hasEnoughMemoryForSmall() {
     const memory = this.getDeviceMemory();
     if (memory === undefined) {
-      // Can't detect memory, assume it might work on desktop, risky on mobile
       return !this.isMobileDevice();
     }
     return memory >= 4;
   }
 
-  // Check if Small model is risky for this device
   isSmallModelRisky() {
     if (!this.isMobileDevice()) return false;
     const memory = this.getDeviceMemory();
-    // Risky if mobile and memory < 4GB or unknown
     return memory === undefined || memory < 4;
   }
 
   getModelForDevice() {
-    // If user selected a model, use that
     if (this.selectedModel) {
       return this.selectedModel;
     }
-    // Otherwise, auto-detect: Tiny for mobile, Small for desktop
     return this.isMobileDevice() ? 'Xenova/whisper-tiny' : 'Xenova/whisper-small';
   }
 
   setSelectedModel(modelSize) {
-    // modelSize: 'tiny', 'base', 'small', or null for auto
     if (modelSize === null || modelSize === 'auto') {
       this.selectedModel = null;
     } else {
-      // Allow Small on mobile but log warning
       if (modelSize === 'small' && this.isMobileDevice()) {
-        console.warn('Small model on mobile device - may cause memory issues on devices with < 4GB RAM');
+        console.warn('Small model on mobile device - may cause memory issues');
       }
       this.selectedModel = `Xenova/whisper-${modelSize}`;
     }
-    // Reset model loaded state to force reload with new model
     this.modelLoaded = false;
-
-    // Terminate existing worker to force model reload
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
@@ -129,16 +148,13 @@ class TranscriptionService {
   }
 
   getCurrentModelInfo() {
-    // Returns info about the model that will be loaded
     const modelPath = this.getModelForDevice();
     const modelSize = modelPath.replace('Xenova/whisper-', '');
-
     const sizes = {
       'tiny': '~40 MB',
       'base': '~75 MB',
       'small': '~150 MB'
     };
-
     return {
       name: modelSize.charAt(0).toUpperCase() + modelSize.slice(1),
       size: sizes[modelSize] || '~150 MB',
@@ -157,15 +173,21 @@ class TranscriptionService {
     return this.mode;
   }
 
-  // Reset worker to free memory (workaround for WebGPU memory leak)
-  async resetWorker() {
-    console.log('Resetting worker to free memory...');
+  getSupportedLanguages() {
+    return WHISPER_LANGUAGES;
+  }
 
+  getWhisperLanguageName(code) {
+    if (code === 'auto') return null;
+    const lang = WHISPER_LANGUAGES.find(l => l.code === code);
+    return lang ? lang.whisper : 'spanish';
+  }
+
+  async resetWorker() {
     if (this.worker) {
-      // Send dispose message first
       try {
         await new Promise((resolve) => {
-          const timeout = setTimeout(resolve, 1000); // Timeout after 1s
+          const timeout = setTimeout(resolve, 1000);
           const handler = (event) => {
             if (event.data.type === 'dispose_complete') {
               clearTimeout(timeout);
@@ -179,15 +201,11 @@ class TranscriptionService {
       } catch (e) {
         console.warn('Error disposing pipeline:', e);
       }
-
-      // Terminate worker
       this.worker.terminate();
       this.worker = null;
     }
-
     this.modelLoaded = false;
     this.transcriptionCount = 0;
-    console.log('Worker reset complete');
   }
 
   async initWebGPUModel(onProgress) {
@@ -199,43 +217,33 @@ class TranscriptionService {
 
     try {
       this.modelName = this.getModelForDevice();
-      const deviceType = this.isMobileDevice() ? 'mobile' : 'desktop';
-
-      console.log(`Loading AI model for ${deviceType}: ${this.modelName}`);
-
-      // Initialize worker if not already done
       this.initWorker();
 
-      // Send load message to worker
       await new Promise((resolve, reject) => {
         this.loadResolve = resolve;
         this.loadReject = reject;
-
         this.worker.postMessage({
           type: 'load',
           data: { modelName: this.modelName }
         });
       });
-
-      console.log(`WebGPU model loaded successfully: ${this.modelName}`);
     } catch (error) {
-      console.error('Error loading WebGPU model:', error);
       this.modelLoading = false;
       throw error;
     }
   }
 
   async transcribeWithBackend(audioBlob, languageOptions = {}) {
-    console.log('Transcribing with backend...', {
-      size: audioBlob.size,
-      type: audioBlob.type,
-      languageOptions
-    });
-
     const formData = new FormData();
     formData.append('audio', audioBlob, 'recording.wav');
-    formData.append('inputLanguage', languageOptions.inputLanguage || 'es');
-    formData.append('outputLanguage', languageOptions.outputLanguage || 'same');
+
+    const inputLang = languageOptions.inputLanguage || 'es';
+    // For auto-detect, don't send language so Whisper detects it
+    if (inputLang !== 'auto') {
+      formData.append('inputLanguage', inputLang);
+    }
+    formData.append('task', languageOptions.task || 'transcribe');
+    formData.append('timestamps', languageOptions.timestamps ? 'true' : 'false');
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 300000);
@@ -254,162 +262,78 @@ class TranscriptionService {
       }
 
       const data = await response.json();
-      console.log('Backend response:', data);
 
       if (data.success) {
         return {
           success: true,
           transcription: data.transcription.trim(),
-          originalText: data.originalText ? data.originalText.trim() : null,
-          translatedText: data.translatedText ? data.translatedText.trim() : null,
+          segments: data.segments || null,
+          detectedLanguage: data.detected_language || null,
           method: 'backend',
-          translated: data.translated || false
+          task: languageOptions.task || 'transcribe'
         };
       } else {
         throw new Error(data.error || 'Transcription failed');
       }
     } catch (error) {
-      console.error('Backend transcription error:', error);
-
       if (error.name === 'AbortError') {
-        throw new Error('Timeout: Audio is too long. Try a shorter recording.');
+        throw new Error('Timeout: el audio es demasiado largo.');
       } else if (error.message.includes('fetch')) {
-        throw new Error('Connection error. Make sure the server is running on http://localhost:5001');
+        throw new Error('Error de conexion. Asegurate de que el servidor esta corriendo en http://localhost:5001');
       }
-
       throw error;
     }
   }
 
-  async translateText(text, sourceLang, targetLang) {
-    try {
-      // Use MyMemory Translation API (free, no API key required)
-      const response = await fetch(
-        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
-      );
-
-      if (!response.ok) {
-        throw new Error('Translation service error');
-      }
-
-      const data = await response.json();
-
-      if (data.responseStatus === 200 || data.responseData) {
-        return data.responseData.translatedText;
-      } else {
-        throw new Error('Translation failed');
-      }
-    } catch (error) {
-      console.error('Translation error:', error);
-      // Return original text if translation fails
-      return text;
-    }
-  }
-
   async transcribeWithWebGPU(audioBlob, onProgress, languageOptions = {}) {
-    console.log('Transcribing with WebGPU...', {
-      size: audioBlob.size,
-      type: audioBlob.type,
-      languageOptions
-    });
-
     if (!this.modelLoaded) {
       await this.initWebGPUModel(onProgress);
     }
 
     try {
       const arrayBuffer = await audioBlob.arrayBuffer();
-
       const audioContext = new AudioContext({ sampleRate: 16000 });
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
       const audioData = audioBuffer.getChannelData(0);
 
-      // Map language codes to Whisper format
-      const languageMap = {
-        'es': 'spanish',
-        'en': 'english',
-        'fr': 'french',
-        'de': 'german',
-        'it': 'italian',
-        'pt': 'portuguese',
-        'zh': 'chinese',
-        'ja': 'japanese',
-        'ko': 'korean',
-        'ru': 'russian',
-        'ar': 'arabic',
-        'hi': 'hindi'
+      const inputLang = languageOptions.inputLanguage || 'es';
+      const task = languageOptions.task || 'transcribe';
+      const timestamps = languageOptions.timestamps || false;
+
+      const options = {
+        task: task,
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        return_timestamps: timestamps
       };
 
-      const inputLang = languageOptions.inputLanguage || 'es';
-      const outputLang = languageOptions.outputLanguage || 'same';
+      // For auto-detect, omit language so Whisper detects it
+      if (inputLang !== 'auto') {
+        options.language = this.getWhisperLanguageName(inputLang);
+      }
 
-      // Determine task: translate to English if outputLanguage is 'en' and different from input
-      const task = (outputLang === 'en' && outputLang !== inputLang) ? 'translate' : 'transcribe';
-
-      // Send transcription request to worker
       const result = await new Promise((resolve, reject) => {
         this.transcribeResolve = resolve;
         this.transcribeReject = reject;
 
         this.worker.postMessage({
           type: 'transcribe',
-          data: {
-            audioData: audioData,
-            options: {
-              language: languageMap[inputLang] || 'spanish',
-              task: task,
-              chunk_length_s: 30,
-              stride_length_s: 5,
-              return_timestamps: false
-            }
-          }
+          data: { audioData, options }
         });
       });
 
-      console.log('WebGPU result:', result);
-
-      // Increment transcription count and check for reset
       this.transcriptionCount++;
-      console.log(`Transcription count: ${this.transcriptionCount}/${MAX_TRANSCRIPTIONS_BEFORE_RESET}`);
-
-      // Schedule worker reset if we've hit the limit (do it after returning result)
       const shouldReset = this.transcriptionCount >= MAX_TRANSCRIPTIONS_BEFORE_RESET;
-
-      let originalText = result.text.trim();
-      let translatedText = null;
-      let finalText = originalText;
-
-      // If output language is different from input and not 'same', translate the result
-      if (outputLang !== 'same' && outputLang !== inputLang) {
-        // If task was 'translate' (to English), the result is already in English
-        if (task === 'translate' && outputLang !== 'en') {
-          // Need to translate from English to target language
-          console.log(`Translating from English to ${outputLang}...`);
-          translatedText = await this.translateText(originalText, 'en', outputLang);
-          finalText = translatedText;
-        } else if (task === 'transcribe') {
-          // Need to translate from input language to output language
-          console.log(`Translating from ${inputLang} to ${outputLang}...`);
-          translatedText = await this.translateText(originalText, inputLang, outputLang);
-          finalText = translatedText;
-        }
-      }
 
       const resultData = {
         success: true,
-        transcription: finalText,
-        originalText: originalText,
-        translatedText: translatedText,
+        transcription: result.text.trim(),
+        chunks: timestamps ? result.chunks : null,
         method: 'webgpu',
-        task: task,
-        translated: outputLang !== 'same' && outputLang !== inputLang
+        task: task
       };
 
-      // Reset worker asynchronously if needed (doesn't block the return)
       if (shouldReset) {
-        console.log('Scheduling worker reset to free memory...');
-        // Use setTimeout to reset after returning the result
         setTimeout(() => {
           this.resetWorker().catch(err => {
             console.error('Error during automatic worker reset:', err);
@@ -454,16 +378,13 @@ class TranscriptionService {
 
       if (response.ok) {
         this.backendAvailable = true;
-        console.log('Backend is available');
         return true;
       } else {
         this.backendAvailable = false;
-        console.log('Backend responded with error');
         return false;
       }
-    } catch (error) {
+    } catch {
       this.backendAvailable = false;
-      console.log('Backend is not available:', error.message);
       return false;
     }
   }
@@ -472,19 +393,14 @@ class TranscriptionService {
     return this.backendAvailable;
   }
 
-  getModelName() {
-    return this.modelName;
-  }
-
-  // Check WebGPU support
   async checkWebGPUSupport() {
     try {
       if (!navigator.gpu) {
-        return { supported: false, reason: 'WebGPU API not available in this browser' };
+        return { supported: false, reason: 'WebGPU API no disponible en este navegador' };
       }
       const adapter = await navigator.gpu.requestAdapter();
       if (!adapter) {
-        return { supported: false, reason: 'No WebGPU adapter found' };
+        return { supported: false, reason: 'No se encontro adaptador WebGPU' };
       }
       return { supported: true, adapter };
     } catch (error) {
@@ -492,38 +408,29 @@ class TranscriptionService {
     }
   }
 
-  // Get cached models from Cache API
   async getCachedModels() {
     try {
       const cache = await caches.open('transformers-cache');
       const keys = await cache.keys();
-
       const models = new Map();
 
       for (const request of keys) {
         const url = request.url;
-        // Extract model name from URL (e.g., Xenova/whisper-tiny)
         const match = url.match(/huggingface\.co\/([^/]+\/whisper-[^/]+)/);
         if (match) {
           const modelName = match[1];
           if (!models.has(modelName)) {
             models.set(modelName, { files: [], totalSize: 0 });
           }
-
-          // Try to get file size from cache
           const response = await cache.match(request);
           if (response) {
             const blob = await response.clone().blob();
-            models.get(modelName).files.push({
-              url: url,
-              size: blob.size
-            });
+            models.get(modelName).files.push({ url, size: blob.size });
             models.get(modelName).totalSize += blob.size;
           }
         }
       }
 
-      // Convert to array with formatted info
       const result = [];
       for (const [name, data] of models) {
         const size = data.totalSize;
@@ -532,11 +439,11 @@ class TranscriptionService {
           : `${(size / 1024).toFixed(1)} KB`;
 
         result.push({
-          name: name,
+          name,
           displayName: name.replace('Xenova/whisper-', '').charAt(0).toUpperCase() +
                        name.replace('Xenova/whisper-', '').slice(1),
-          size: size,
-          sizeFormatted: sizeFormatted,
+          size,
+          sizeFormatted,
           fileCount: data.files.length
         });
       }
@@ -548,7 +455,6 @@ class TranscriptionService {
     }
   }
 
-  // Delete a specific model from cache
   async deleteCachedModel(modelName) {
     try {
       const cache = await caches.open('transformers-cache');
@@ -562,7 +468,6 @@ class TranscriptionService {
         }
       }
 
-      // If this was the currently loaded model, reset state
       if (this.modelName === modelName) {
         this.modelLoaded = false;
         this.modelName = null;
@@ -572,36 +477,27 @@ class TranscriptionService {
         }
       }
 
-      console.log(`Deleted ${deletedCount} files for model ${modelName}`);
       return { success: true, deletedCount };
     } catch (error) {
-      console.error('Error deleting cached model:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Clear all cached models
   async clearAllCachedModels() {
     try {
       await caches.delete('transformers-cache');
-
-      // Reset state
       this.modelLoaded = false;
       this.modelName = null;
       if (this.worker) {
         this.worker.terminate();
         this.worker = null;
       }
-
-      console.log('All cached models cleared');
       return { success: true };
     } catch (error) {
-      console.error('Error clearing cached models:', error);
       return { success: false, error: error.message };
     }
   }
 
-  // Get total cache size
   async getTotalCacheSize() {
     const models = await this.getCachedModels();
     const total = models.reduce((sum, model) => sum + model.size, 0);

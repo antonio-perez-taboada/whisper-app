@@ -126,7 +126,7 @@ self.addEventListener('message', async (event) => {
           type: 'transcribe_complete',
           data: {
             text: result.text,
-            chunks: result.chunks,
+            chunks: result.chunks || null,
             transcriptionCount: result.transcriptionCount
           }
         });
