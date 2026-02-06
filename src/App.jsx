@@ -157,76 +157,242 @@ const ACCENT_PRESETS = [
   { name: 'Red', hex: '#ef4444' },
 ];
 
-// Siri Ring Visualizer - draws on a canvas
-function drawSiriRing(canvas, audioLevel, accentHex, time) {
+// Spectacular Siri Orb Visualizer
+function drawSiriOrb(canvas, audioLevel, accentHex, time, freqData, smoothedRef, particlesRef, dt) {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const size = canvas.width;
-  const center = size / 2;
+  const cx = size / 2;
+  const cy = size / 2;
   const { r, g, b } = hexToRgb(accentHex);
+  const { h, s } = hexToHsl(accentHex);
 
   ctx.clearRect(0, 0, size, size);
 
-  const normalizedLevel = Math.min(audioLevel / 180, 1);
-  const baseRadius = size * 0.28;
-  const pulseAmount = normalizedLevel * size * 0.08;
+  const level = Math.min(audioLevel / 150, 1);
+  const baseR = size * 0.25;
 
-  // Outer glow layers
-  for (let i = 3; i >= 0; i--) {
-    const glowRadius = baseRadius + pulseAmount + i * 12;
-    const alpha = 0.03 + normalizedLevel * 0.04;
-    const gradient = ctx.createRadialGradient(center, center, glowRadius * 0.5, center, center, glowRadius);
-    gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${alpha})`);
-    gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-    ctx.fillStyle = gradient;
+  // Smooth frequency data for organic movement
+  const smoothed = smoothedRef.current;
+  const bands = 64;
+  if (freqData && freqData.length > 0) {
+    const step = Math.floor(freqData.length / bands);
+    for (let i = 0; i < bands; i++) {
+      let sum = 0;
+      for (let j = 0; j < step; j++) sum += freqData[i * step + j] || 0;
+      const target = (sum / step) / 255;
+      smoothed[i] += (target - smoothed[i]) * 0.15;
+    }
+  } else {
+    for (let i = 0; i < bands; i++) {
+      smoothed[i] *= 0.92;
+    }
+  }
+
+  // === AMBIENT BACKGROUND NEBULA ===
+  for (let i = 0; i < 3; i++) {
+    const nebulaR = baseR * (1.8 + i * 0.4) + level * 30;
+    const angle = time * (0.3 + i * 0.15) + i * 2.1;
+    const ox = Math.cos(angle) * baseR * 0.15;
+    const oy = Math.sin(angle) * baseR * 0.12;
+    const grad = ctx.createRadialGradient(cx + ox, cy + oy, 0, cx + ox, cy + oy, nebulaR);
+    const hueShift = (h + i * 40 + time * 15) % 360;
+    grad.addColorStop(0, `hsla(${hueShift}, ${s}%, 55%, ${0.04 + level * 0.06})`);
+    grad.addColorStop(0.5, `hsla(${hueShift}, ${s}%, 45%, ${0.02 + level * 0.03})`);
+    grad.addColorStop(1, 'transparent');
+    ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.arc(center, center, glowRadius, 0, Math.PI * 2);
+    ctx.arc(cx + ox, cy + oy, nebulaR, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Draw morphing ring with frequency distortion
-  const segments = 128;
-  const baseAlpha = 0.6 + normalizedLevel * 0.4;
+  // === ORGANIC BLOB LAYERS (Bezier-based) ===
+  const numLayers = 5;
+  const pts = 8; // control points per blob
 
-  for (let layer = 0; layer < 3; layer++) {
-    const layerOffset = layer * 0.7;
-    const layerRadius = baseRadius + pulseAmount * (1 - layer * 0.2);
-    const layerAlpha = baseAlpha * (1 - layer * 0.25);
-    const lineWidth = (3 - layer) + normalizedLevel * 2;
+  for (let layer = 0; layer < numLayers; layer++) {
+    const layerT = layer / numLayers;
+    const hueShift = (h + layer * 30 + Math.sin(time * 0.5 + layer) * 20) % 360;
+    const lightness = 50 + level * 15;
+    const layerRadius = baseR * (0.85 + layerT * 0.35) + level * baseR * 0.2;
+    const rotSpeed = (layer % 2 === 0 ? 1 : -1) * (0.4 + layerT * 0.3);
+    const rotation = time * rotSpeed + layer * 1.256;
 
+    // Compute control points with frequency-based distortion
+    const controlPoints = [];
+    for (let i = 0; i < pts; i++) {
+      const angle = (i / pts) * Math.PI * 2 + rotation;
+      const freqIdx = Math.floor((i / pts) * bands) % bands;
+      const freqVal = smoothed[freqIdx] || 0;
+      const distort = freqVal * baseR * 0.35 + level * baseR * 0.15;
+
+      const wave =
+        Math.sin(angle * 2 + time * 1.5 + layer * 0.8) * (8 + level * 15) +
+        Math.sin(angle * 3 - time * 2.2 + layer * 1.3) * (5 + level * 10) +
+        Math.sin(angle * 5 + time * 0.8 + layer * 2.0) * (3 + level * 6);
+
+      const r2 = layerRadius + distort + wave;
+      controlPoints.push({
+        x: cx + Math.cos(angle) * r2,
+        y: cy + Math.sin(angle) * r2
+      });
+    }
+
+    // Draw smooth closed bezier curve through points
+    const lineW = 1.5 + (numLayers - layer) * 0.5 + level * 1.5;
+    const alpha = (0.15 + level * 0.45) * (1 - layerT * 0.5);
+
+    ctx.save();
     ctx.beginPath();
-    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${layerAlpha})`;
-    ctx.lineWidth = lineWidth;
-    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${layerAlpha * 0.6})`;
-    ctx.shadowBlur = 10 + normalizedLevel * 20;
+    ctx.strokeStyle = `hsla(${hueShift}, ${Math.min(s + 15, 100)}%, ${lightness}%, ${alpha})`;
+    ctx.lineWidth = lineW;
+    ctx.shadowColor = `hsla(${hueShift}, ${s}%, ${lightness}%, ${alpha * 0.8})`;
+    ctx.shadowBlur = 12 + level * 25;
 
-    for (let i = 0; i <= segments; i++) {
-      const angle = (i / segments) * Math.PI * 2;
-      const distortion = normalizedLevel * 8 * (
-        Math.sin(angle * 3 + time * 2 + layerOffset) * 0.5 +
-        Math.sin(angle * 5 - time * 1.5 + layerOffset) * 0.3 +
-        Math.sin(angle * 7 + time * 3 + layerOffset) * 0.2
-      );
-      const r2 = layerRadius + distortion;
-      const x = center + Math.cos(angle) * r2;
-      const y = center + Math.sin(angle) * r2;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+    for (let i = 0; i < pts; i++) {
+      const curr = controlPoints[i];
+      const next = controlPoints[(i + 1) % pts];
+      const prev = controlPoints[(i - 1 + pts) % pts];
+      const next2 = controlPoints[(i + 2) % pts];
+
+      if (i === 0) ctx.moveTo(curr.x, curr.y);
+
+      // Catmull-Rom to Bezier control points
+      const cp1x = curr.x + (next.x - prev.x) / 6;
+      const cp1y = curr.y + (next.y - prev.y) / 6;
+      const cp2x = next.x - (next2.x - curr.x) / 6;
+      const cp2y = next.y - (next2.y - curr.y) / 6;
+
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, next.x, next.y);
     }
     ctx.closePath();
     ctx.stroke();
+
+    // Fill innermost layers with gradient
+    if (layer < 2) {
+      const fillAlpha = (0.03 + level * 0.05) * (1 - layerT);
+      ctx.fillStyle = `hsla(${hueShift}, ${s}%, ${lightness}%, ${fillAlpha})`;
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
-  // Inner gradient fill
-  const innerGradient = ctx.createRadialGradient(center, center, 0, center, center, baseRadius * 0.8);
-  innerGradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.05 + normalizedLevel * 0.08})`);
-  innerGradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
-  ctx.fillStyle = innerGradient;
-  ctx.shadowBlur = 0;
-  ctx.shadowColor = 'transparent';
+  // === INNER CORE GLOW ===
+  const coreR = baseR * (0.5 + level * 0.2);
+  const coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, coreR);
+  const coreHue = (h + Math.sin(time) * 15) % 360;
+  coreGrad.addColorStop(0, `hsla(${coreHue}, ${s}%, 65%, ${0.12 + level * 0.2})`);
+  coreGrad.addColorStop(0.4, `hsla(${coreHue}, ${s}%, 55%, ${0.06 + level * 0.1})`);
+  coreGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = coreGrad;
   ctx.beginPath();
-  ctx.arc(center, center, baseRadius + pulseAmount, 0, Math.PI * 2);
+  ctx.arc(cx, cy, coreR, 0, Math.PI * 2);
   ctx.fill();
+
+  // Bright center dot
+  const dotR = 3 + level * 5;
+  const dotGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, dotR);
+  dotGrad.addColorStop(0, `rgba(255, 255, 255, ${0.3 + level * 0.5})`);
+  dotGrad.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${0.2 + level * 0.3})`);
+  dotGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = dotGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+  ctx.fill();
+
+  // === PARTICLES ===
+  const particles = particlesRef.current;
+
+  // Spawn particles when audio is active
+  if (level > 0.05 && particles.length < 60) {
+    const spawnCount = Math.floor(level * 4);
+    for (let i = 0; i < spawnCount; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 20 + Math.random() * 60 * level;
+      const life = 0.8 + Math.random() * 1.5;
+      const pSize = 1 + Math.random() * 3 * level;
+      const pHue = (h + Math.random() * 60 - 30) % 360;
+      particles.push({
+        x: cx + Math.cos(angle) * baseR * (0.8 + Math.random() * 0.3),
+        y: cy + Math.sin(angle) * baseR * (0.8 + Math.random() * 0.3),
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life, maxLife: life, size: pSize, hue: pHue
+      });
+    }
+  }
+
+  // Update and draw particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vx *= 0.97;
+    p.vy *= 0.97;
+    p.life -= dt;
+
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    const lifeRatio = p.life / p.maxLife;
+    const pAlpha = lifeRatio * (0.4 + level * 0.5);
+    const pR = p.size * (0.5 + lifeRatio * 0.5);
+
+    ctx.save();
+    ctx.globalAlpha = pAlpha;
+    ctx.shadowColor = `hsla(${p.hue}, ${s}%, 60%, ${pAlpha})`;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = `hsla(${p.hue}, ${Math.min(s + 20, 100)}%, 70%, 1)`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, pR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // === ROTATING LIGHT STREAK ===
+  const streakAngle = time * 1.2;
+  const streakLen = baseR * (0.7 + level * 0.5);
+  const x1 = cx + Math.cos(streakAngle) * baseR * 0.6;
+  const y1 = cy + Math.sin(streakAngle) * baseR * 0.6;
+  const x2 = cx + Math.cos(streakAngle) * (baseR * 0.6 + streakLen);
+  const y2 = cy + Math.sin(streakAngle) * (baseR * 0.6 + streakLen);
+
+  const streakGrad = ctx.createLinearGradient(x1, y1, x2, y2);
+  streakGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.06 + level * 0.12})`);
+  streakGrad.addColorStop(0.5, `rgba(255, 255, 255, ${0.03 + level * 0.06})`);
+  streakGrad.addColorStop(1, 'transparent');
+  ctx.save();
+  ctx.lineWidth = 2 + level * 3;
+  ctx.strokeStyle = streakGrad;
+  ctx.lineCap = 'round';
+  ctx.shadowColor = `rgba(${r}, ${g}, ${b}, ${0.3 * level})`;
+  ctx.shadowBlur = 15;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.restore();
+
+  // Mirror streak
+  const mx1 = cx + Math.cos(streakAngle + Math.PI) * baseR * 0.6;
+  const my1 = cy + Math.sin(streakAngle + Math.PI) * baseR * 0.6;
+  const mx2 = cx + Math.cos(streakAngle + Math.PI) * (baseR * 0.6 + streakLen * 0.7);
+  const my2 = cy + Math.sin(streakAngle + Math.PI) * (baseR * 0.6 + streakLen * 0.7);
+
+  const mGrad = ctx.createLinearGradient(mx1, my1, mx2, my2);
+  mGrad.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${0.04 + level * 0.08})`);
+  mGrad.addColorStop(1, 'transparent');
+  ctx.save();
+  ctx.lineWidth = 1.5 + level * 2;
+  ctx.strokeStyle = mGrad;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(mx1, my1);
+  ctx.lineTo(mx2, my2);
+  ctx.stroke();
+  ctx.restore();
 }
 
 // Decode audio blob to AudioBuffer and extract mono channel
@@ -353,6 +519,12 @@ function App() {
   const toolSiriCanvasRef = useRef(null);
   const toolSiriAnimRef = useRef(null);
   const toolSiriTimeRef = useRef(0);
+  const freqDataRef = useRef(new Uint8Array(128));
+  const toolFreqDataRef = useRef(new Uint8Array(128));
+  const smoothedFreqRef = useRef(new Float32Array(128));
+  const toolSmoothedFreqRef = useRef(new Float32Array(128));
+  const particlesRef = useRef([]);
+  const toolParticlesRef = useRef([]);
 
   // Tool recorder refs
   const toolMediaRecorderRef = useRef(null);
@@ -417,14 +589,22 @@ function App() {
       return;
     }
 
-    const animate = () => {
-      siriTimeRef.current += 0.016;
+    let lastTime = performance.now();
+    const animate = (now) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      siriTimeRef.current += dt;
       const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
-      drawSiriRing(siriCanvasRef.current, isRecording && !isPaused ? audioLevel : 0, accent, siriTimeRef.current);
+      const active = isRecording && !isPaused;
+      drawSiriOrb(
+        siriCanvasRef.current, active ? audioLevel : 0, accent,
+        siriTimeRef.current, active ? freqDataRef.current : null,
+        smoothedFreqRef, particlesRef, dt
+      );
       siriAnimRef.current = requestAnimationFrame(animate);
     };
 
-    animate();
+    siriAnimRef.current = requestAnimationFrame(animate);
     return () => {
       if (siriAnimRef.current) cancelAnimationFrame(siriAnimRef.current);
     };
@@ -437,14 +617,22 @@ function App() {
       return;
     }
 
-    const animate = () => {
-      toolSiriTimeRef.current += 0.016;
+    let lastTime = performance.now();
+    const animate = (now) => {
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      toolSiriTimeRef.current += dt;
       const accent = accentColor || (activeTheme === 'light' ? '#0891b2' : '#06b6d4');
-      drawSiriRing(toolSiriCanvasRef.current, toolIsRecording && !toolIsPaused ? toolAudioLevel : 0, accent, toolSiriTimeRef.current);
+      const active = toolIsRecording && !toolIsPaused;
+      drawSiriOrb(
+        toolSiriCanvasRef.current, active ? toolAudioLevel : 0, accent,
+        toolSiriTimeRef.current, active ? toolFreqDataRef.current : null,
+        toolSmoothedFreqRef, toolParticlesRef, dt
+      );
       toolSiriAnimRef.current = requestAnimationFrame(animate);
     };
 
-    animate();
+    toolSiriAnimRef.current = requestAnimationFrame(animate);
     return () => {
       if (toolSiriAnimRef.current) cancelAnimationFrame(toolSiriAnimRef.current);
     };
@@ -602,6 +790,7 @@ function App() {
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
         setAudioLevel(avg);
+        freqDataRef.current = dataArray;
         animationFrameRef.current = requestAnimationFrame(visualize);
       };
       visualize();
@@ -704,6 +893,7 @@ function App() {
         analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b) / dataArray.length;
         setToolAudioLevel(avg);
+        toolFreqDataRef.current = dataArray;
         toolAnimationFrameRef.current = requestAnimationFrame(visualize);
       };
       visualize();
@@ -1107,8 +1297,8 @@ function App() {
           <canvas
             ref={canvasRef}
             className="siri-canvas"
-            width={400}
-            height={400}
+            width={600}
+            height={600}
           />
         </div>
       );

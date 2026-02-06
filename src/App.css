@@ -1693,13 +1693,12 @@ audio::-webkit-media-controls-panel {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 160px;
+  min-height: 220px;
 }
 
 .siri-canvas {
-  width: 200px;
-  height: 200px;
-  border-radius: 50%;
+  width: 260px;
+  height: 260px;
 }
 
 .viz-toggle {
