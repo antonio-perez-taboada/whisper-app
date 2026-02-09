@@ -3,7 +3,6 @@ import './App.css';
 import { transcriptionService } from './transcriptionService';
 import InstallPrompt from './InstallPrompt';
 import { SoundTouch, SimpleFilter, WebAudioBufferSource } from 'soundtouchjs';
-import * as lamejs from 'lamejs';
 
 // WAV encoder utility
 function encodeWAV(audioBuffer) {
@@ -173,46 +172,6 @@ async function timeStretchAudio(audioBuffer, speed) {
   await audioCtx.close();
   return result;
 }
-
-// Encode AudioBuffer to MP3 using lamejs
-function encodeMP3(audioBuffer, bitrate = 128) {
-  const numChannels = audioBuffer.numberOfChannels;
-  const sampleRate = audioBuffer.sampleRate;
-  const encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, bitrate);
-
-  // Convert Float32 to Int16
-  const toInt16 = (float32) => {
-    const int16 = new Int16Array(float32.length);
-    for (let i = 0; i < float32.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32[i]));
-      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-    return int16;
-  };
-
-  const left = toInt16(audioBuffer.getChannelData(0));
-  const right = numChannels > 1 ? toInt16(audioBuffer.getChannelData(1)) : left;
-
-  const BLOCK_SIZE = 1152;
-  const mp3Parts = [];
-
-  for (let i = 0; i < left.length; i += BLOCK_SIZE) {
-    const leftBlock = left.subarray(i, i + BLOCK_SIZE);
-    const rightBlock = right.subarray(i, i + BLOCK_SIZE);
-    const mp3buf = encoder.encodeBuffer(leftBlock, rightBlock);
-    if (mp3buf.length > 0) {
-      mp3Parts.push(new Uint8Array(mp3buf));
-    }
-  }
-
-  const end = encoder.flush();
-  if (end.length > 0) {
-    mp3Parts.push(new Uint8Array(end));
-  }
-
-  return new Blob(mp3Parts, { type: 'audio/mp3' });
-}
-
 // Get theme from preferences
 function getInitialTheme() {
   const saved = localStorage.getItem('themePreference');
@@ -299,7 +258,6 @@ function App() {
   const [toolAudioUrl, setToolAudioUrl] = useState(null);
   const [toolAudioBlob, setToolAudioBlob] = useState(null);
   const [toolSpeed, setToolSpeed] = useState(1.0);
-  const [toolFormat, setToolFormat] = useState('wav');
   const [isProcessingDownload, setIsProcessingDownload] = useState(false);
   const [toolAudioBufferData, setToolAudioBufferData] = useState(null);
   const [toolIsPlaying, setToolIsPlaying] = useState(false);
@@ -864,17 +822,9 @@ function App() {
       }
 
       const speedLabel = toolSpeed !== 1.0 ? `_${toolSpeed}x` : '';
-      let downloadBlob;
-      let fileName;
-
-      if (toolFormat === 'mp3') {
-        downloadBlob = await encodeMP3(processedBuffer);
-        fileName = `grabacion${speedLabel}.mp3`;
-      } else {
-        const wavData = encodeWAV(processedBuffer);
-        downloadBlob = new Blob([wavData], { type: 'audio/wav' });
-        fileName = `grabacion${speedLabel}.wav`;
-      }
+      const wavData = encodeWAV(processedBuffer);
+      const downloadBlob = new Blob([wavData], { type: 'audio/wav' });
+      const fileName = `grabacion${speedLabel}.wav`;
 
       const url = URL.createObjectURL(downloadBlob);
       const a = document.createElement('a');
@@ -892,7 +842,7 @@ function App() {
     } finally {
       setIsProcessingDownload(false);
     }
-  }, [toolAudioBlob, toolSpeed, toolFormat]);
+  }, [toolAudioBlob, toolSpeed]);
 
   // ===== AUDIO TRIMMER =====
   const trimAndUseAudio = useCallback(async (action) => {
@@ -1714,26 +1664,6 @@ function App() {
             </div>
           </div>
 
-          <div className="format-selector">
-            <label>Formato</label>
-            <div className="format-options">
-              <button
-                className={`format-opt ${toolFormat === 'wav' ? 'sel' : ''}`}
-                onClick={() => setToolFormat('wav')}
-              >
-                WAV
-                <span className="format-desc">Sin comprimir</span>
-              </button>
-              <button
-                className={`format-opt ${toolFormat === 'mp3' ? 'sel' : ''}`}
-                onClick={() => setToolFormat('mp3')}
-              >
-                MP3
-                <span className="format-desc">Comprimido</span>
-              </button>
-            </div>
-          </div>
-
           <button
             className="btn-download"
             onClick={downloadAudioWithSpeed}
@@ -1750,7 +1680,7 @@ function App() {
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                   <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                <span>Descargar {toolFormat.toUpperCase()} {toolSpeed !== 1.0 ? `(${toolSpeed}x)` : ''}</span>
+                <span>Descargar WAV {toolSpeed !== 1.0 ? `(${toolSpeed}x)` : ''}</span>
               </>
             )}
           </button>
