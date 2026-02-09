@@ -2,7 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 import { transcriptionService } from './transcriptionService';
 import InstallPrompt from './InstallPrompt';
-import * as Tone from 'tone';
+import { SoundTouch, SimpleFilter, WebAudioBufferSource } from 'soundtouchjs';
+import * as lamejs from 'lamejs';
 
 // WAV encoder utility
 function encodeWAV(audioBuffer) {
@@ -118,6 +119,100 @@ async function decodeAudioBlob(blob) {
   return audioBuffer;
 }
 
+// Time-stretch audio using SoundTouch WSOLA (preserves pitch)
+async function timeStretchAudio(audioBuffer, speed) {
+  const st = new SoundTouch();
+  st.tempo = speed;
+
+  const source = new WebAudioBufferSource(audioBuffer);
+  const filter = new SimpleFilter(source, st);
+
+  const BATCH_SIZE = 4096;
+  const channels = audioBuffer.numberOfChannels;
+  // SoundTouch works in interleaved stereo (2 channels)
+  const expectedFrames = Math.ceil(audioBuffer.length / speed) + 8192;
+  let outputInterleaved = new Float32Array(expectedFrames * 2);
+  let totalFrames = 0;
+
+  while (true) {
+    const batch = new Float32Array(BATCH_SIZE * 2);
+    const extracted = filter.extract(batch, BATCH_SIZE);
+    if (extracted === 0) break;
+
+    // Grow buffer if needed
+    if ((totalFrames + extracted) * 2 > outputInterleaved.length) {
+      const newBuf = new Float32Array((totalFrames + extracted + BATCH_SIZE) * 2);
+      newBuf.set(outputInterleaved);
+      outputInterleaved = newBuf;
+    }
+
+    outputInterleaved.set(batch.subarray(0, extracted * 2), totalFrames * 2);
+    totalFrames += extracted;
+  }
+
+  // Create output AudioBuffer and de-interleave
+  const audioCtx = new AudioContext();
+  const outChannels = Math.min(channels, 2);
+  const result = audioCtx.createBuffer(outChannels, totalFrames, audioBuffer.sampleRate);
+
+  if (outChannels === 1) {
+    const ch = result.getChannelData(0);
+    for (let i = 0; i < totalFrames; i++) {
+      // Average L+R from interleaved stereo
+      ch[i] = (outputInterleaved[i * 2] + outputInterleaved[i * 2 + 1]) / 2;
+    }
+  } else {
+    const left = result.getChannelData(0);
+    const right = result.getChannelData(1);
+    for (let i = 0; i < totalFrames; i++) {
+      left[i] = outputInterleaved[i * 2];
+      right[i] = outputInterleaved[i * 2 + 1];
+    }
+  }
+
+  await audioCtx.close();
+  return result;
+}
+
+// Encode AudioBuffer to MP3 using lamejs
+function encodeMP3(audioBuffer, bitrate = 128) {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, bitrate);
+
+  // Convert Float32 to Int16
+  const toInt16 = (float32) => {
+    const int16 = new Int16Array(float32.length);
+    for (let i = 0; i < float32.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32[i]));
+      int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    return int16;
+  };
+
+  const left = toInt16(audioBuffer.getChannelData(0));
+  const right = numChannels > 1 ? toInt16(audioBuffer.getChannelData(1)) : left;
+
+  const BLOCK_SIZE = 1152;
+  const mp3Parts = [];
+
+  for (let i = 0; i < left.length; i += BLOCK_SIZE) {
+    const leftBlock = left.subarray(i, i + BLOCK_SIZE);
+    const rightBlock = right.subarray(i, i + BLOCK_SIZE);
+    const mp3buf = encoder.encodeBuffer(leftBlock, rightBlock);
+    if (mp3buf.length > 0) {
+      mp3Parts.push(new Uint8Array(mp3buf));
+    }
+  }
+
+  const end = encoder.flush();
+  if (end.length > 0) {
+    mp3Parts.push(new Uint8Array(end));
+  }
+
+  return new Blob(mp3Parts, { type: 'audio/mp3' });
+}
+
 // Get theme from preferences
 function getInitialTheme() {
   const saved = localStorage.getItem('themePreference');
@@ -204,6 +299,7 @@ function App() {
   const [toolAudioUrl, setToolAudioUrl] = useState(null);
   const [toolAudioBlob, setToolAudioBlob] = useState(null);
   const [toolSpeed, setToolSpeed] = useState(1.0);
+  const [toolFormat, setToolFormat] = useState('wav');
   const [isProcessingDownload, setIsProcessingDownload] = useState(false);
   const [toolAudioBufferData, setToolAudioBufferData] = useState(null);
   const [toolIsPlaying, setToolIsPlaying] = useState(false);
@@ -761,60 +857,29 @@ function App() {
       let processedBuffer;
 
       if (toolSpeed === 1.0) {
-        // No processing needed
         processedBuffer = decoded;
       } else {
-        // Use Tone.js for pitch-preserving time-stretching
-        await Tone.start(); // Initialize Tone.js audio context
-
-        // Calculate new duration and pitch compensation
-        const originalDuration = decoded.duration;
-        const newDuration = originalDuration / toolSpeed;
-
-        // Calculate pitch shift needed to compensate for playbackRate
-        // playbackRate changes both speed AND pitch
-        // We need to shift pitch in opposite direction to keep it constant
-        const pitchShiftSemitones = -12 * Math.log2(toolSpeed);
-
-        // Create Tone.js buffer from Web Audio API buffer
-        const toneBuffer = new Tone.ToneAudioBuffer(decoded);
-
-        // Render offline with Tone.js
-        const rendered = await Tone.Offline(() => {
-          // Create player with the buffer
-          const player = new Tone.Player(toneBuffer);
-
-          // Create pitch shifter with optimized parameters for quality
-          const pitchShift = new Tone.PitchShift({
-            pitch: pitchShiftSemitones,
-            windowSize: 0.03, // Smaller window = less artifacts but may affect quality
-            delayTime: 0, // No additional delay
-            feedback: 0 // No feedback to avoid echo
-          });
-
-          // Chain: Player -> PitchShift -> Destination
-          player.chain(pitchShift, Tone.getDestination());
-
-          // Set playback rate (this changes both speed and pitch)
-          player.playbackRate = toolSpeed;
-
-          // Start playback
-          player.start(0);
-        }, newDuration);
-
-        // Convert Tone.js buffer to Web Audio API AudioBuffer
-        processedBuffer = rendered.get();
+        // SoundTouch WSOLA: changes tempo without changing pitch
+        processedBuffer = await timeStretchAudio(decoded, toolSpeed);
       }
 
-      // Encode to WAV and download
-      const wavData = encodeWAV(processedBuffer);
-      const wavBlob = new Blob([wavData], { type: 'audio/wav' });
+      const speedLabel = toolSpeed !== 1.0 ? `_${toolSpeed}x` : '';
+      let downloadBlob;
+      let fileName;
 
-      const url = URL.createObjectURL(wavBlob);
+      if (toolFormat === 'mp3') {
+        downloadBlob = await encodeMP3(processedBuffer);
+        fileName = `grabacion${speedLabel}.mp3`;
+      } else {
+        const wavData = encodeWAV(processedBuffer);
+        downloadBlob = new Blob([wavData], { type: 'audio/wav' });
+        fileName = `grabacion${speedLabel}.wav`;
+      }
+
+      const url = URL.createObjectURL(downloadBlob);
       const a = document.createElement('a');
       a.href = url;
-      const speedLabel = toolSpeed !== 1.0 ? `_${toolSpeed}x` : '';
-      a.download = `grabacion${speedLabel}.wav`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -827,7 +892,7 @@ function App() {
     } finally {
       setIsProcessingDownload(false);
     }
-  }, [toolAudioBlob, toolSpeed]);
+  }, [toolAudioBlob, toolSpeed, toolFormat]);
 
   // ===== AUDIO TRIMMER =====
   const trimAndUseAudio = useCallback(async (action) => {
@@ -1649,6 +1714,26 @@ function App() {
             </div>
           </div>
 
+          <div className="format-selector">
+            <label>Formato</label>
+            <div className="format-options">
+              <button
+                className={`format-opt ${toolFormat === 'wav' ? 'sel' : ''}`}
+                onClick={() => setToolFormat('wav')}
+              >
+                WAV
+                <span className="format-desc">Sin comprimir</span>
+              </button>
+              <button
+                className={`format-opt ${toolFormat === 'mp3' ? 'sel' : ''}`}
+                onClick={() => setToolFormat('mp3')}
+              >
+                MP3
+                <span className="format-desc">Comprimido</span>
+              </button>
+            </div>
+          </div>
+
           <button
             className="btn-download"
             onClick={downloadAudioWithSpeed}
@@ -1665,7 +1750,7 @@ function App() {
                   <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
                   <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                <span>Descargar WAV {toolSpeed !== 1.0 ? `(${toolSpeed}x)` : ''}</span>
+                <span>Descargar {toolFormat.toUpperCase()} {toolSpeed !== 1.0 ? `(${toolSpeed}x)` : ''}</span>
               </>
             )}
           </button>
