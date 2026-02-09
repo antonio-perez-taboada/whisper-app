@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import './App.css';
 import { transcriptionService } from './transcriptionService';
 import InstallPrompt from './InstallPrompt';
+import * as Tone from 'tone';
 
 // WAV encoder utility
 function encodeWAV(audioBuffer) {
@@ -56,7 +57,7 @@ function encodeWAV(audioBuffer) {
 }
 
 // Draw waveform on canvas from audio data
-function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
+function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor, progress = null) {
   if (!canvas || !audioData) return;
   const ctx = canvas.getContext('2d');
   const width = canvas.width;
@@ -68,9 +69,7 @@ function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
   const step = Math.ceil(audioData.length / width);
   const amp = height / 2;
 
-  ctx.fillStyle = accentColor || '#06b6d4';
-  ctx.globalAlpha = 0.8;
-
+  // Draw waveform bars
   for (let i = 0; i < width; i++) {
     let min = 1.0;
     let max = -1.0;
@@ -82,7 +81,29 @@ function drawWaveformOnCanvas(canvas, audioData, accentColor, bgColor) {
     }
     const yLow = (1 + min) * amp;
     const yHigh = (1 + max) * amp;
+
+    // Color based on progress
+    if (progress !== null && i / width <= progress) {
+      ctx.fillStyle = accentColor || '#06b6d4';
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = accentColor || '#06b6d4';
+      ctx.globalAlpha = 0.3;
+    }
+
     ctx.fillRect(i, yLow, 1, Math.max(1, yHigh - yLow));
+  }
+
+  // Draw progress line
+  if (progress !== null && progress >= 0 && progress <= 1) {
+    const progressX = progress * width;
+    ctx.strokeStyle = accentColor || '#06b6d4';
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(progressX, 0);
+    ctx.lineTo(progressX, height);
+    ctx.stroke();
   }
 
   ctx.globalAlpha = 1;
@@ -132,6 +153,9 @@ function App() {
   const [recordedAudioUrl, setRecordedAudioUrl] = useState(null);
   const [recordedAudioBlob, setRecordedAudioBlob] = useState(null);
   const [audioBufferData, setAudioBufferData] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   // Mode & model
   const [mode, setMode] = useState('webgpu');
@@ -182,6 +206,9 @@ function App() {
   const [toolSpeed, setToolSpeed] = useState(1.0);
   const [isProcessingDownload, setIsProcessingDownload] = useState(false);
   const [toolAudioBufferData, setToolAudioBufferData] = useState(null);
+  const [toolIsPlaying, setToolIsPlaying] = useState(false);
+  const [toolCurrentTime, setToolCurrentTime] = useState(0);
+  const [toolDuration, setToolDuration] = useState(0);
 
   // Refs
   const mediaRecorderRef = useRef(null);
@@ -235,12 +262,49 @@ function App() {
     }
   }, [themePreference]);
 
-  const cycleTheme = () => {
-    if (activeTheme === 'dark') {
-      setThemePreference('light');
-    } else {
-      setThemePreference('dark');
+  const cycleTheme = (event) => {
+    // Check if View Transitions API is supported
+    if (!document.startViewTransition) {
+      // Fallback for browsers without support
+      if (activeTheme === 'dark') {
+        setThemePreference('light');
+      } else {
+        setThemePreference('dark');
+      }
+      return;
     }
+
+    // Get the button position for the circular transition
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+
+    // Calculate the maximum radius needed to cover the entire viewport
+    const endRadius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y)
+    );
+
+    // Set CSS custom properties for the animation
+    document.documentElement.style.setProperty('--theme-transition-x', `${x}px`);
+    document.documentElement.style.setProperty('--theme-transition-y', `${y}px`);
+    document.documentElement.style.setProperty('--theme-transition-end-radius', `${endRadius}px`);
+
+    // Start the view transition
+    const transition = document.startViewTransition(() => {
+      if (activeTheme === 'dark') {
+        setThemePreference('light');
+      } else {
+        setThemePreference('dark');
+      }
+    });
+
+    // Clean up custom properties after transition
+    transition.finished.finally(() => {
+      document.documentElement.style.removeProperty('--theme-transition-x');
+      document.documentElement.style.removeProperty('--theme-transition-y');
+      document.documentElement.style.removeProperty('--theme-transition-end-radius');
+    });
   };
 
   // Load history
@@ -293,9 +357,10 @@ function App() {
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
       const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent');
+      const progress = duration > 0 ? currentTime / duration : null;
+      drawWaveformOnCanvas(canvas, audioBufferData, color, 'transparent', progress);
     }
-  }, [audioBufferData, activeTheme]);
+  }, [audioBufferData, activeTheme, currentTime, duration]);
 
   // Draw trimmer waveform
   useEffect(() => {
@@ -315,9 +380,17 @@ function App() {
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 160;
       const color = activeTheme === 'light' ? '#0891b2' : '#06b6d4';
-      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent');
+      const progress = toolDuration > 0 ? toolCurrentTime / toolDuration : null;
+      drawWaveformOnCanvas(canvas, toolAudioBufferData, color, 'transparent', progress);
     }
-  }, [toolAudioBufferData, activeTheme]);
+  }, [toolAudioBufferData, activeTheme, toolCurrentTime, toolDuration]);
+
+  // Set playback rate when audio loads
+  useEffect(() => {
+    if (toolAudioPlayerRef.current) {
+      toolAudioPlayerRef.current.playbackRate = toolSpeed;
+    }
+  }, [toolAudioUrl]);
 
   const loadCachedModels = async () => {
     setIsLoadingCache(true);
@@ -348,6 +421,111 @@ function App() {
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit'
     });
+  };
+
+  // ===== AUDIO PLAYER CONTROLS =====
+  const togglePlayPause = () => {
+    const audio = audioPlayerRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setIsPlaying(!isPlaying);
+  };
+
+  const handleTimeUpdate = () => {
+    const audio = audioPlayerRef.current;
+    if (!audio) return;
+    setCurrentTime(audio.currentTime);
+  };
+
+  const handleLoadedMetadata = () => {
+    const audio = audioPlayerRef.current;
+    if (!audio) return;
+    setDuration(audio.duration);
+  };
+
+  const handleAudioEnded = () => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.currentTime = 0;
+    }
+  };
+
+  const seekTo = (time) => {
+    const audio = audioPlayerRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    setCurrentTime(time);
+  };
+
+  const handleWaveformClick = (e) => {
+    if (!waveformCanvasRef.current || !duration) return;
+    const rect = waveformCanvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percent = x / rect.width;
+    const time = percent * duration;
+    seekTo(time);
+  };
+
+  // Tool audio player controls
+  const toolTogglePlayPause = () => {
+    const audio = toolAudioPlayerRef.current;
+    if (!audio) return;
+
+    if (toolIsPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+    setToolIsPlaying(!toolIsPlaying);
+  };
+
+  const toolHandleTimeUpdate = () => {
+    const audio = toolAudioPlayerRef.current;
+    if (!audio) return;
+    setToolCurrentTime(audio.currentTime);
+  };
+
+  const toolHandleLoadedMetadata = () => {
+    const audio = toolAudioPlayerRef.current;
+    if (!audio) return;
+    setToolDuration(audio.duration);
+  };
+
+  const toolHandleAudioEnded = () => {
+    setToolIsPlaying(false);
+    setToolCurrentTime(0);
+    if (toolAudioPlayerRef.current) {
+      toolAudioPlayerRef.current.currentTime = 0;
+    }
+  };
+
+  const toolSeekTo = (time) => {
+    const audio = toolAudioPlayerRef.current;
+    if (!audio) return;
+    audio.currentTime = time;
+    setToolCurrentTime(time);
+  };
+
+  const toolHandleWaveformClick = (e) => {
+    if (!toolWaveformCanvasRef.current || !toolDuration) return;
+    const rect = toolWaveformCanvasRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const percent = x / rect.width;
+    const time = percent * toolDuration;
+    toolSeekTo(time);
+  };
+
+  const handleSpeedChange = (newSpeed) => {
+    setToolSpeed(newSpeed);
+    if (toolAudioPlayerRef.current) {
+      toolAudioPlayerRef.current.playbackRate = newSpeed;
+    }
   };
 
   // Load audio buffer data for waveform visualization
@@ -402,6 +580,9 @@ function App() {
         const url = URL.createObjectURL(blob);
         setRecordedAudioUrl(url);
         setRecordedAudioBlob(blob);
+        setIsPlaying(false);
+        setCurrentTime(0);
+        setDuration(0);
         loadAudioBufferForWaveform(blob, setAudioBufferData, setAudioDuration);
         await transcribeAudio(blob, 'recording');
       };
@@ -504,6 +685,9 @@ function App() {
         const url = URL.createObjectURL(blob);
         setToolAudioUrl(url);
         setToolAudioBlob(blob);
+        setToolIsPlaying(false);
+        setToolCurrentTime(0);
+        setToolDuration(0);
         loadAudioBufferForWaveform(blob, setToolAudioBufferData, null);
       };
 
@@ -574,21 +758,56 @@ function App() {
       const audioCtx = new AudioContext();
       const decoded = await audioCtx.decodeAudioData(arrayBuffer);
 
-      const duration = decoded.duration / toolSpeed;
-      const offlineCtx = new OfflineAudioContext(
-        decoded.numberOfChannels,
-        Math.ceil(decoded.sampleRate * duration),
-        decoded.sampleRate
-      );
+      let processedBuffer;
 
-      const source = offlineCtx.createBufferSource();
-      source.buffer = decoded;
-      source.playbackRate.value = toolSpeed;
-      source.connect(offlineCtx.destination);
-      source.start();
+      if (toolSpeed === 1.0) {
+        // No processing needed
+        processedBuffer = decoded;
+      } else {
+        // Use Tone.js for pitch-preserving time-stretching
+        await Tone.start(); // Initialize Tone.js audio context
 
-      const rendered = await offlineCtx.startRendering();
-      const wavData = encodeWAV(rendered);
+        // Calculate new duration and pitch compensation
+        const originalDuration = decoded.duration;
+        const newDuration = originalDuration / toolSpeed;
+
+        // Calculate pitch shift needed to compensate for playbackRate
+        // playbackRate changes both speed AND pitch
+        // We need to shift pitch in opposite direction to keep it constant
+        const pitchShiftSemitones = -12 * Math.log2(toolSpeed);
+
+        // Create Tone.js buffer from Web Audio API buffer
+        const toneBuffer = new Tone.ToneAudioBuffer(decoded);
+
+        // Render offline with Tone.js
+        const rendered = await Tone.Offline(() => {
+          // Create player with the buffer
+          const player = new Tone.Player(toneBuffer);
+
+          // Create pitch shifter with optimized parameters for quality
+          const pitchShift = new Tone.PitchShift({
+            pitch: pitchShiftSemitones,
+            windowSize: 0.03, // Smaller window = less artifacts but may affect quality
+            delayTime: 0, // No additional delay
+            feedback: 0 // No feedback to avoid echo
+          });
+
+          // Chain: Player -> PitchShift -> Destination
+          player.chain(pitchShift, Tone.getDestination());
+
+          // Set playback rate (this changes both speed and pitch)
+          player.playbackRate = toolSpeed;
+
+          // Start playback
+          player.start(0);
+        }, newDuration);
+
+        // Convert Tone.js buffer to Web Audio API AudioBuffer
+        processedBuffer = rendered.get();
+      }
+
+      // Encode to WAV and download
+      const wavData = encodeWAV(processedBuffer);
       const wavBlob = new Blob([wavData], { type: 'audio/wav' });
 
       const url = URL.createObjectURL(wavBlob);
@@ -600,9 +819,11 @@ function App() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      await audioCtx.close();
     } catch (error) {
       console.error('Error processing audio:', error);
-      alert('Error al procesar el audio para descarga.');
+      alert('Error al procesar el audio para descarga: ' + error.message);
     } finally {
       setIsProcessingDownload(false);
     }
@@ -645,6 +866,9 @@ function App() {
         const url = URL.createObjectURL(trimmedBlob);
         setRecordedAudioUrl(url);
         setRecordedAudioBlob(trimmedBlob);
+        setIsPlaying(false);
+        setCurrentTime(0);
+        setDuration(0);
         loadAudioBufferForWaveform(trimmedBlob, setAudioBufferData, setAudioDuration);
         setIsTrimming(false);
         await transcribeAudio(trimmedBlob, 'trimmed recording');
@@ -804,6 +1028,9 @@ function App() {
     const url = URL.createObjectURL(file);
     setRecordedAudioUrl(url);
     setRecordedAudioBlob(file);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
     loadAudioBufferForWaveform(file, setAudioBufferData, setAudioDuration);
     setIsTrimming(false);
   };
@@ -973,6 +1200,9 @@ function App() {
         </div>
       </div>
 
+      <div className="transcribe-grid">
+      <div className="transcribe-input">
+
       {/* Upload zone */}
       <div
         className={`upload-area ${isDragging ? 'drag' : ''} ${uploadedFile ? 'has-file' : ''}`}
@@ -1056,18 +1286,67 @@ function App() {
           </button>
         </div>
       </div>
+      </div>{/* end transcribe-input */}
 
+      <div className="transcribe-output">
       {/* Waveform visualization + Audio player */}
       {recordedAudioUrl && !isRecording && (
         <div className="audio-player-card">
-          <h3>Audio</h3>
+          <h3>Audio grabado</h3>
           {audioBufferData && (
-            <div className="waveform-canvas-container">
+            <div className="waveform-canvas-container" onClick={handleWaveformClick} style={{ cursor: 'pointer' }}>
               <canvas ref={waveformCanvasRef} className="waveform-canvas" />
-              <span className="waveform-canvas-label">Waveform</span>
+              <span className="waveform-canvas-label">Haz clic para saltar</span>
             </div>
           )}
-          <audio ref={audioPlayerRef} controls src={recordedAudioUrl} className="audio-player" />
+
+          {/* Hidden native audio element */}
+          <audio
+            ref={audioPlayerRef}
+            src={recordedAudioUrl}
+            onTimeUpdate={handleTimeUpdate}
+            onLoadedMetadata={handleLoadedMetadata}
+            onEnded={handleAudioEnded}
+            style={{ display: 'none' }}
+          />
+
+          {/* Custom audio controls */}
+          <div className="custom-audio-controls">
+            <button className="play-pause-btn" onClick={togglePlayPause}>
+              {isPlaying ? (
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16" rx="2"/>
+                  <rect x="14" y="4" width="4" height="16" rx="2"/>
+                </svg>
+              ) : (
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+              )}
+            </button>
+
+            <div className="time-display">
+              <span className="current-time">{formatTime(Math.floor(currentTime))}</span>
+              <span className="time-separator">/</span>
+              <span className="total-time">{formatTime(Math.floor(duration))}</span>
+            </div>
+
+            <div className="progress-bar-container">
+              <input
+                type="range"
+                min="0"
+                max={duration || 0}
+                step="0.1"
+                value={currentTime}
+                onChange={(e) => seekTo(parseFloat(e.target.value))}
+                className="progress-bar"
+                style={{
+                  background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${duration > 0 ? (currentTime / duration) * 100 : 0}%, var(--surface-3) ${duration > 0 ? (currentTime / duration) * 100 : 0}%, var(--surface-3) 100%)`
+                }}
+              />
+            </div>
+          </div>
+
           {audioBufferData && audioDuration > 0 && !isTrimming && (
             <button
               className="btn-sm btn-ghost full-w"
@@ -1199,6 +1478,37 @@ function App() {
           </div>
         </div>
       )}
+
+      {!recordedAudioUrl && !isTranscribing && !transcription && !isRecording && (
+        <div className="output-placeholder">
+          <div className="output-placeholder-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+            </svg>
+          </div>
+          <p>La transcripcion aparecera aqui</p>
+          <p className="hint">Graba audio o sube un archivo para comenzar</p>
+        </div>
+      )}
+
+      {isRecording && (
+        <div className="output-placeholder recording">
+          <div className="output-placeholder-icon pulse">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/>
+              <path d="M19 10v2a7 7 0 01-14 0v-2"/>
+              <line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
+            </svg>
+          </div>
+          <p>Grabando audio...</p>
+          <p className="hint">Detener la grabacion para transcribir</p>
+        </div>
+      )}
+      </div>{/* end transcribe-output */}
+      </div>{/* end transcribe-grid */}
     </div>
   );
 
@@ -1251,23 +1561,64 @@ function App() {
 
       {toolAudioUrl && !toolIsRecording && (
         <div className="audio-tool-card">
-          <h3>Reproducir</h3>
+          <h3>Audio grabado</h3>
           {toolAudioBufferData && (
-            <div className="waveform-canvas-container">
+            <div className="waveform-canvas-container" onClick={toolHandleWaveformClick} style={{ cursor: 'pointer' }}>
               <canvas ref={toolWaveformCanvasRef} className="waveform-canvas" />
-              <span className="waveform-canvas-label">Waveform</span>
+              <span className="waveform-canvas-label">Haz clic para saltar</span>
             </div>
           )}
+
+          {/* Hidden native audio element */}
           <audio
             ref={toolAudioPlayerRef}
-            controls
             src={toolAudioUrl}
-            className="audio-player"
+            onTimeUpdate={toolHandleTimeUpdate}
+            onLoadedMetadata={toolHandleLoadedMetadata}
+            onEnded={toolHandleAudioEnded}
+            style={{ display: 'none' }}
           />
+
+          {/* Custom audio controls */}
+          <div className="custom-audio-controls">
+            <button className="play-pause-btn" onClick={toolTogglePlayPause}>
+              {toolIsPlaying ? (
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16" rx="2"/>
+                  <rect x="14" y="4" width="4" height="16" rx="2"/>
+                </svg>
+              ) : (
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+              )}
+            </button>
+
+            <div className="time-display">
+              <span className="current-time">{formatTime(Math.floor(toolCurrentTime))}</span>
+              <span className="time-separator">/</span>
+              <span className="total-time">{formatTime(Math.floor(toolDuration))}</span>
+            </div>
+
+            <div className="progress-bar-container">
+              <input
+                type="range"
+                min="0"
+                max={toolDuration || 0}
+                step="0.1"
+                value={toolCurrentTime}
+                onChange={(e) => toolSeekTo(parseFloat(e.target.value))}
+                className="progress-bar"
+                style={{
+                  background: `linear-gradient(to right, var(--accent) 0%, var(--accent) ${toolDuration > 0 ? (toolCurrentTime / toolDuration) * 100 : 0}%, var(--surface-3) ${toolDuration > 0 ? (toolCurrentTime / toolDuration) * 100 : 0}%, var(--surface-3) 100%)`
+                }}
+              />
+            </div>
+          </div>
 
           <div className="speed-control">
             <div className="speed-header">
-              <label>Velocidad de descarga</label>
+              <label>Velocidad (mantiene el tono)</label>
               <span className="speed-value">{toolSpeed.toFixed(2)}x</span>
             </div>
             <input
@@ -1276,7 +1627,7 @@ function App() {
               max="3.0"
               step="0.05"
               value={toolSpeed}
-              onChange={(e) => setToolSpeed(parseFloat(e.target.value))}
+              onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}
               className="speed-slider"
             />
             <div className="speed-marks">
@@ -1290,7 +1641,7 @@ function App() {
                 <button
                   key={s}
                   className={`speed-preset ${toolSpeed === s ? 'sel' : ''}`}
-                  onClick={() => setToolSpeed(s)}
+                  onClick={() => handleSpeedChange(s)}
                 >
                   {s}x
                 </button>
@@ -1512,7 +1863,7 @@ function App() {
           </svg>
           <span>Transcript X</span>
         </div>
-        <button className="theme-toggle" onClick={cycleTheme} title={activeTheme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}>
+        <button className="theme-toggle" onClick={(e) => cycleTheme(e)} title={activeTheme === 'dark' ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro'}>
           {activeTheme === 'dark' ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
