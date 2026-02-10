@@ -1094,22 +1094,187 @@ function App() {
 
   // ===== RENDER FUNCTIONS =====
 
-  const renderWaveform = (level, active, barCount = 20) => (
-    <div className="waveform">
-      {[...Array(barCount)].map((_, i) => (
-        <div
-          key={i}
-          className={`wf-bar ${active ? 'active' : ''}`}
-          style={{
-            height: active
-              ? `${Math.random() * level * 2.5 + 12}%`
-              : '12%',
-            animationDelay: `${i * 0.05}s`
-          }}
-        />
-      ))}
-    </div>
-  );
+  // Canvas Waveform - Natural, Alive, Fluid (Michelangelo-worthy)
+  const WaveformCanvas = ({ level, active }) => {
+    const canvasRef = useRef(null);
+    const animationIdRef = useRef(null);
+    const barsRef = useRef(null);
+    const smoothedLevelRef = useRef(0);
+
+    useEffect(() => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d', { alpha: true });
+      const dpr = window.devicePixelRatio || 1;
+
+      // Set canvas size
+      const updateSize = () => {
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        return { width: rect.width, height: rect.height };
+      };
+
+      let { width, height } = updateSize();
+      const centerY = height / 2;
+
+      // Bar properties - Larger and more visible
+      const barCount = 40;
+      const barWidth = Math.max(2, (width - (barCount - 1) * 3) / barCount);
+      const maxBarHeight = height * 0.44; // Larger dramatic movement
+      const minBarHeight = 12; // More visible base
+
+      // Initialize bars with spring physics
+      if (!barsRef.current) {
+        barsRef.current = new Array(barCount).fill(0).map(() => ({
+          current: minBarHeight,
+          velocity: 0
+        }));
+      }
+
+      const bars = barsRef.current;
+
+      const animate = () => {
+        // Clear canvas
+        ctx.clearRect(0, 0, width, height);
+
+        // Extra smooth audio level to eliminate ANY flicker
+        const targetLevel = active ? level : 0;
+        smoothedLevelRef.current += (targetLevel - smoothedLevelRef.current) * 0.35;
+        const smoothedLevel = smoothedLevelRef.current;
+
+        // Simple linear intensity (no curve to avoid non-linear jumps)
+        const intensity = Math.min(smoothedLevel / 100, 1);
+
+        // Dynamic glow - ALWAYS drawn, NO threshold
+        const glowIntensity = intensity * 0.22;
+        const glowRadius = Math.min(width, height) * (0.45 + intensity * 0.15);
+
+        if (glowIntensity > 0.001) { // Only skip if truly zero (avoid wasting GPU)
+          const gradient = ctx.createRadialGradient(
+            width / 2, centerY, 0,
+            width / 2, centerY, glowRadius
+          );
+          gradient.addColorStop(0, `rgba(6, 182, 212, ${glowIntensity * 0.8})`);
+          gradient.addColorStop(0.5, `rgba(34, 211, 238, ${glowIntensity * 0.4})`);
+          gradient.addColorStop(1, 'rgba(6, 182, 212, 0)');
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, width, height);
+        }
+
+        // Animation time
+        const time = Date.now() / 1000;
+
+        for (let i = 0; i < barCount; i++) {
+          const x = i * (barWidth + 3);
+          const position = i / barCount;
+
+          // Breathing idle animation (always present, more visible)
+          const idleBase = 12;
+          const idleWave = Math.sin(time * 1.2 + position * Math.PI * 1.8) * 4;
+          const idleHeight = idleBase + idleWave;
+
+          // Audio-reactive components - MORE AMPLITUDE
+          const frequencyBias = Math.abs(position - 0.5) * 2;
+
+          // Significantly increased multipliers for visible, dramatic movement
+          const bass = (1 - frequencyBias) * smoothedLevel * (0.7 + intensity * 0.3);
+          const treble = frequencyBias * smoothedLevel * (0.5 + intensity * 0.25);
+          const waveMotion = Math.sin((position * Math.PI * 2) + time * 3) * smoothedLevel * (0.25 + intensity * 0.15);
+          const barVariation = Math.sin(time * 4 + i * 0.5) * smoothedLevel * (0.18 + intensity * 0.1);
+
+          // Target height - CONTINUOUS combination
+          const targetHeight = Math.max(minBarHeight, Math.min(maxBarHeight,
+            idleHeight + bass + treble + waveMotion + barVariation
+          ));
+
+          // Spring physics
+          const bar = bars[i];
+          const diff = targetHeight - bar.current;
+          const springForce = diff * 0.22;
+          const damping = bar.velocity * 0.76;
+
+          bar.velocity += springForce - damping;
+          bar.current += bar.velocity;
+
+          const barHeight = Math.max(minBarHeight * 0.8, bar.current);
+
+          // Color gradient
+          const hue = 180 + position * 35;
+
+          // Lightness - CONTINUOUS based on intensity and height
+          const baseLightness = 45;
+          const intensityLightness = intensity * 8;
+          const heightLightness = (barHeight / maxBarHeight) * 12;
+          const lightness = baseLightness + intensityLightness + heightLightness;
+
+          // Alpha - CONTINUOUS transition (NO jumps)
+          const baseAlpha = 0.4 + (intensity * 0.55); // 0.4 → 0.95
+          const heightAlpha = (barHeight / maxBarHeight) * 0.1;
+          const alpha = Math.min(1, baseAlpha + heightAlpha);
+
+          // Shadow blur - CONTINUOUS
+          const shadowBlur = 3 + (intensity * 12) + ((barHeight / maxBarHeight) * 6);
+
+          // Draw bar (top half)
+          ctx.fillStyle = `hsla(${hue}, 100%, ${lightness}%, ${alpha})`;
+          ctx.shadowBlur = shadowBlur;
+          ctx.shadowColor = `hsla(${hue}, 100%, 60%, ${alpha * 0.5})`;
+
+          ctx.fillRect(x, centerY - barHeight, barWidth, barHeight);
+
+          // Mirror (bottom half)
+          ctx.globalAlpha = alpha * 0.55;
+          ctx.shadowBlur = shadowBlur * 0.6;
+          ctx.fillRect(x, centerY, barWidth, barHeight * 0.95);
+          ctx.globalAlpha = 1;
+
+          // Peak sparkles - fade in gradually
+          if (barHeight > maxBarHeight * 0.75) {
+            const sparkleIntensity = ((barHeight / maxBarHeight) - 0.75) * 4;
+            const sparkleAlpha = Math.min(sparkleIntensity * intensity, 1);
+
+            if (sparkleAlpha > 0.1) {
+              ctx.fillStyle = `hsla(${hue + 20}, 100%, 70%, ${sparkleAlpha})`;
+              ctx.shadowBlur = 10 * sparkleAlpha;
+              ctx.shadowColor = `hsla(${hue + 20}, 100%, 70%, ${sparkleAlpha * 0.6})`;
+              ctx.beginPath();
+              ctx.arc(x + barWidth / 2, centerY - barHeight - 5, 2, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+
+        ctx.shadowBlur = 0;
+
+        // Continue animation loop
+        animationIdRef.current = requestAnimationFrame(animate);
+      };
+
+      animate();
+
+      return () => {
+        if (animationIdRef.current) {
+          cancelAnimationFrame(animationIdRef.current);
+        }
+      };
+    }, [level, active]);
+
+    return (
+      <canvas
+        ref={canvasRef}
+        className="waveform-canvas-viz"
+        style={{ width: '100%', height: '120px' }}
+      />
+    );
+  };
+
+  const renderWaveform = (level, active) => {
+    return <WaveformCanvas level={level} active={active} />;
+  };
 
   const renderTimestampResult = () => {
     // Backend segments
@@ -1147,7 +1312,7 @@ function App() {
 
   const renderTranscribeTab = () => (
     <div className="tab-content">
-      {/* Config bar */}
+      {/* Simplified Config bar - Only show mode and model selector */}
       <div className="config-bar">
         {backendAvailable && (
           <div className="mode-switch">
@@ -1164,55 +1329,19 @@ function App() {
           </div>
         )}
 
-        <div className="config-row">
-          <button
-            className="config-chip"
-            onClick={() => setIsLanguageSelectorOpen(true)}
-            disabled={isRecording || isTranscribing}
-          >
-            <span className="chip-label">Idioma</span>
-            <span className="chip-value">{currentLang?.name || inputLanguage}</span>
-          </button>
-
-          <button
-            className="config-chip"
-            onClick={() => setTask(task === 'transcribe' ? 'translate' : 'transcribe')}
-            disabled={isRecording || isTranscribing || inputLanguage === 'en'}
-          >
-            <span className="chip-label">Tarea</span>
-            <span className="chip-value">
-              {task === 'transcribe' ? 'Transcribir' : 'Traducir (EN)'}
-            </span>
-          </button>
-
-          {mode === 'webgpu' && (
+        {mode === 'webgpu' && (
+          <div className="config-row">
             <button
               className="config-chip"
               onClick={() => setIsModelSelectorOpen(true)}
               disabled={isRecording || isTranscribing}
+              style={{ maxWidth: '200px', margin: '0 auto' }}
             >
               <span className="chip-label">Modelo</span>
               <span className="chip-value">{transcriptionService.getCurrentModelInfo().name}</span>
             </button>
-          )}
-        </div>
-
-        {/* Timestamps toggle */}
-        <div className="toggle-row">
-          <div className="toggle-info">
-            <span className="toggle-label">Timestamps</span>
-            <span className="toggle-desc">Marcas de tiempo en la transcripcion</span>
           </div>
-          <label className="toggle-switch">
-            <input
-              type="checkbox"
-              checked={enableTimestamps}
-              onChange={(e) => setEnableTimestamps(e.target.checked)}
-              disabled={isRecording || isTranscribing}
-            />
-            <span className="toggle-track"></span>
-          </label>
-        </div>
+        )}
       </div>
 
       <div className="transcribe-grid">
@@ -1362,79 +1491,6 @@ function App() {
             </div>
           </div>
 
-          {audioBufferData && audioDuration > 0 && !isTrimming && (
-            <button
-              className="btn-sm btn-ghost full-w"
-              style={{ marginTop: '0.5rem' }}
-              onClick={() => {
-                setTrimStart(0);
-                setTrimEnd(audioDuration);
-                setIsTrimming(true);
-              }}
-              disabled={isTranscribing}
-            >
-              Recortar audio
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Audio Trimmer */}
-      {isTrimming && audioBufferData && (
-        <div className="trimmer-card">
-          <h3>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/>
-              <line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>
-            </svg>
-            Recortar
-          </h3>
-          <div className="trimmer-waveform-wrap">
-            <canvas ref={trimmerCanvasRef} className="trimmer-canvas" />
-            <div
-              className="trimmer-overlay"
-              style={{
-                left: `${(trimStart / audioDuration) * 100}%`,
-                width: `${((trimEnd - trimStart) / audioDuration) * 100}%`
-              }}
-            />
-            <div
-              className="trimmer-handle start"
-              style={{ left: `${(trimStart / audioDuration) * 100}%` }}
-              onMouseDown={(e) => handleTrimmerMouseDown(e, 'start')}
-              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('start'); }}
-            />
-            <div
-              className="trimmer-handle end"
-              style={{ left: `${(trimEnd / audioDuration) * 100}%` }}
-              onMouseDown={(e) => handleTrimmerMouseDown(e, 'end')}
-              onTouchStart={(e) => { e.preventDefault(); setTrimDragging('end'); }}
-            />
-          </div>
-          <div className="trimmer-times">
-            <div className="trimmer-time">
-              <span className="trimmer-time-label">Inicio</span>
-              <span className="trimmer-time-value">{formatTimePrecise(trimStart)}</span>
-            </div>
-            <div className="trimmer-duration">
-              Duracion: {formatTimePrecise(trimEnd - trimStart)}
-            </div>
-            <div className="trimmer-time">
-              <span className="trimmer-time-label">Fin</span>
-              <span className="trimmer-time-value">{formatTimePrecise(trimEnd)}</span>
-            </div>
-          </div>
-          <div className="trimmer-actions">
-            <button className="btn-sm btn-primary" onClick={() => trimAndUseAudio('transcribe')} disabled={isTranscribing}>
-              Transcribir recorte
-            </button>
-            <button className="btn-sm btn-ghost" onClick={() => trimAndUseAudio('download')}>
-              Descargar recorte
-            </button>
-            <button className="btn-sm btn-ghost" onClick={() => setIsTrimming(false)}>
-              Cancelar
-            </button>
-          </div>
         </div>
       )}
 
@@ -1472,12 +1528,8 @@ function App() {
             </div>
           </div>
 
-          {/* Show timestamps or plain text */}
-          {enableTimestamps && (transcriptionSegments || transcriptionChunks) ? (
-            renderTimestampResult()
-          ) : (
-            <div className="result-text">{transcription}</div>
-          )}
+          {/* Always show plain text (timestamps hidden in transcribe tab) */}
+          <div className="result-text">{transcription}</div>
 
           <div className="result-actions">
             <button
